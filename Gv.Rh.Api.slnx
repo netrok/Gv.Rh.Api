@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Gv.Rh.Api/Gv.Rh.Api.csproj" />
+  <Project Path="Gv.Rh.Application/Gv.Rh.Application.csproj" />
+  <Project Path="Gv.Rh.Domain/Gv.Rh.Domain.csproj" />
+  <Project Path="Gv.Rh.Infrastructure/Gv.Rh.Infrastructure.csproj" />
+</Solution>
