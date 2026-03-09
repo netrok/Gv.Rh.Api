@@ -57,7 +57,13 @@ builder.Services.AddCors(opt =>
 
 // JWT Auth
 var jwt = builder.Configuration.GetSection("Jwt");
-var key = jwt["Key"] ?? throw new InvalidOperationException("Falta Jwt:Key en appsettings.");
+
+var key = jwt["Key"] ?? throw new InvalidOperationException(
+    "Falta Jwt:Key. Configúralo con User Secrets (DEV) o variables de entorno (PROD). No lo pongas en el repo."
+);
+
+var issuer = jwt["Issuer"] ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
+var audience = jwt["Audience"] ?? throw new InvalidOperationException("Falta Jwt:Audience.");
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(opt =>
@@ -68,8 +74,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateAudience = true,
             ValidateIssuerSigningKey = true,
             ValidateLifetime = true,
-            ValidIssuer = jwt["Issuer"],
-            ValidAudience = jwt["Audience"],
+            ValidIssuer = issuer,
+            ValidAudience = audience,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)),
             ClockSkew = TimeSpan.FromSeconds(30)
         };

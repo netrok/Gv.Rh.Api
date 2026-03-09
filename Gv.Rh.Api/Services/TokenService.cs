@@ -23,7 +23,11 @@ public class TokenService
     public string CreateAccessToken(AppUser user)
     {
         var jwt = _config.GetSection("Jwt");
-        var key = jwt["Key"] ?? throw new InvalidOperationException("Falta Jwt:Key.");
+
+        var key = jwt["Key"] ?? throw new InvalidOperationException(
+            "Falta Jwt:Key. Configúralo con User Secrets (DEV) o variables de entorno (PROD)."
+        );
+
         var issuer = jwt["Issuer"] ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
         var audience = jwt["Audience"] ?? throw new InvalidOperationException("Falta Jwt:Audience.");
 
@@ -35,6 +39,8 @@ public class TokenService
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new(JwtRegisteredClaimNames.Email, user.Email),
             new(ClaimTypes.Role, user.Role),
+            // Si mañana soportas múltiples roles, agrega uno por rol:
+            // new(ClaimTypes.Role, "ADMIN"), new(ClaimTypes.Role, "RRHH"), etc.
         };
 
         var accessMinutes = int.TryParse(jwt["AccessMinutes"], out var m) ? m : 15;
