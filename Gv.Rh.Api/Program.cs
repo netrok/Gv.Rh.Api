@@ -83,12 +83,13 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
-// Services
-builder.Services.AddScoped<TokenService>();
-
-// Auditoría (interceptor)
+// Infra para auditoría
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<AuditSaveChangesInterceptor>();
+
+// ✅ Services de app (REGÍSTRALOS ANTES DEL BUILD)
+builder.Services.AddScoped<AuditLogger>();   // <-- movido arriba
+builder.Services.AddScoped<TokenService>();  // si TokenService usa AuditLogger, aquí ya está
 
 // DbContext (PostgreSQL) + interceptor
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>

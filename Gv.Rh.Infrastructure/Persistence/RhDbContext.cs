@@ -14,6 +14,8 @@ public class RhDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        base.OnModelCreating(modelBuilder);
+
         // ===== Empleados =====
         modelBuilder.Entity<Empleado>(e =>
         {
@@ -51,7 +53,6 @@ public class RhDbContext : DbContext
                 .OnDelete(DeleteBehavior.SetNull);
 
             // PostgreSQL: UNIQUE permite múltiples NULLs.
-            // Si SOLO usarás PostgreSQL, esto está perfecto:
             u.HasIndex(x => x.EmpleadoId).IsUnique();
         });
 
@@ -78,7 +79,7 @@ public class RhDbContext : DbContext
             t.HasIndex(x => x.ExpiresAtUtc);
         });
 
-        // ===== Audit Log =====
+        // ===== Audit Log (modelo ACTUAL: Email/Role/Entity/EntityId) =====
         modelBuilder.Entity<AuditLog>(a =>
         {
             a.ToTable("audit_log");
@@ -100,7 +101,5 @@ public class RhDbContext : DbContext
             a.HasIndex(x => x.Entity);
             a.HasIndex(x => x.EntityId);
         });
-
-        base.OnModelCreating(modelBuilder);
     }
 }

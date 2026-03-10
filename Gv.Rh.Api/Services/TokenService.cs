@@ -13,11 +13,13 @@ public class TokenService
 {
     private readonly IConfiguration _config;
     private readonly RhDbContext _db;
+    private readonly AuditLogger _audit;
 
-    public TokenService(IConfiguration config, RhDbContext db)
+    public TokenService(IConfiguration config, RhDbContext db, AuditLogger audit)
     {
         _config = config;
         _db = db;
+        _audit = audit;
     }
 
     public string CreateAccessToken(AppUser user)
@@ -31,6 +33,7 @@ public class TokenService
         var issuer = jwt["Issuer"] ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
         var audience = jwt["Audience"] ?? throw new InvalidOperationException("Falta Jwt:Audience.");
 
+        // HS256 pide mínimo 128 bits => usa un key >= 16 bytes (mejor 32+)
         var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key));
         var creds = new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256);
 
@@ -39,8 +42,6 @@ public class TokenService
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new(JwtRegisteredClaimNames.Email, user.Email),
             new(ClaimTypes.Role, user.Role),
-            // Si mañana soportas múltiples roles, agrega uno por rol:
-            // new(ClaimTypes.Role, "ADMIN"), new(ClaimTypes.Role, "RRHH"), etc.
         };
 
         var accessMinutes = int.TryParse(jwt["AccessMinutes"], out var m) ? m : 15;
@@ -153,6 +154,9 @@ public class TokenService
 
         await _db.SaveChangesAsync();
         await tx.CommitAsync();
+
+        // ✅ Auditar refresh (sin secretos)
+        await _audit.LogAuthAsync("REFRESH", user, new { rotated = true });
 
         var access = CreateAccessToken(user);
         return (access, newRaw);

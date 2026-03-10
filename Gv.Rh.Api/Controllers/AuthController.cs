@@ -14,11 +14,13 @@ public class AuthController : ControllerBase
 {
     private readonly RhDbContext _db;
     private readonly TokenService _tokens;
+    private readonly AuditLogger _audit;
 
-    public AuthController(RhDbContext db, TokenService tokens)
+    public AuthController(RhDbContext db, TokenService tokens, AuditLogger audit)
     {
         _db = db;
         _tokens = tokens;
+        _audit = audit;
     }
 
     public record LoginRequest(string Email, string Password);
@@ -38,6 +40,9 @@ public class AuthController : ControllerBase
             return Unauthorized(new { message = "Credenciales inválidas." });
 
         var access = _tokens.CreateAccessToken(user);
+
+        // ✅ Auditar login exitoso (sin secretos)
+        await _audit.LogAuthAsync("LOGIN", user, new { mustChangePassword = user.MustChangePassword });
 
         // ✅ Si debe cambiar password, NO emitimos refresh token
         if (user.MustChangePassword)
@@ -67,6 +72,7 @@ public class AuthController : ControllerBase
     {
         try
         {
+            // Nota: el TokenService ya audita "REFRESH" al rotar
             var (access, refresh) = await _tokens.RotateRefreshTokenAsync(req.RefreshToken);
             return Ok(new { accessToken = access, refreshToken = refresh });
         }
@@ -88,6 +94,9 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> Logout([FromBody] RefreshRequest req)
     {
         await _tokens.RevokeRefreshTokenAsync(req.RefreshToken);
+
+        await _audit.LogAuthAsync("LOGOUT", data: new { ok = true });
+
         return NoContent();
     }
 
@@ -101,6 +110,9 @@ public class AuthController : ControllerBase
             return Unauthorized();
 
         await _tokens.RevokeAllRefreshTokensForUserAsync(userId);
+
+        await _audit.LogAuthAsync("LOGOUT_ALL", data: new { ok = true });
+
         return NoContent();
     }
 
@@ -142,6 +154,9 @@ public class AuthController : ControllerBase
         await _tokens.RevokeAllRefreshTokensForUserAsync(user.Id);
 
         await _db.SaveChangesAsync();
+
+        await _audit.LogAuthAsync("PASSWORD_CHANGE", user, new { revokeAll = true });
+
         return NoContent();
     }
 }

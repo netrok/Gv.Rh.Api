@@ -1,4 +1,5 @@
-﻿using Gv.Rh.Api.Models;
+﻿using ClosedXML.Excel;
+using Gv.Rh.Api.Models;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
@@ -81,6 +82,96 @@ public class EmpleadosController : ControllerBase
         return emp is null ? NotFound() : Ok(emp);
     }
 
+    // GET /api/empleados/export.xlsx?q=...&activo=true
+    [HttpGet("export.xlsx")]
+    public async Task<IActionResult> ExportXlsx([FromQuery] string? q = null, [FromQuery] bool? activo = null)
+    {
+        var query = _db.Empleados.AsNoTracking().AsQueryable();
+
+        if (activo.HasValue)
+            query = query.Where(x => x.Activo == activo.Value);
+
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            var term = q.Trim();
+            query = query.Where(x =>
+                EF.Functions.ILike(x.NumEmpleado, $"%{term}%") ||
+                EF.Functions.ILike(x.Nombres, $"%{term}%") ||
+                EF.Functions.ILike(x.ApellidoPaterno, $"%{term}%") ||
+                (x.ApellidoMaterno != null && EF.Functions.ILike(x.ApellidoMaterno, $"%{term}%")) ||
+                (x.Email != null && EF.Functions.ILike(x.Email, $"%{term}%")) ||
+                (x.Telefono != null && EF.Functions.ILike(x.Telefono, $"%{term}%"))
+            );
+        }
+
+        var rows = await query
+            .OrderBy(x => x.NumEmpleado)
+            .Take(50000) // límite sano
+            .Select(x => new
+            {
+                x.Id,
+                x.NumEmpleado,
+                x.Nombres,
+                x.ApellidoPaterno,
+                x.ApellidoMaterno,
+                x.Email,
+                x.Telefono,
+                x.FechaIngreso, // DateOnly / DateOnly?
+                x.Activo
+            })
+            .ToListAsync();
+
+        using var wb = new XLWorkbook();
+        var ws = wb.Worksheets.Add("Empleados");
+
+        var headers = new[]
+        {
+            "Id","NumEmpleado","Nombres","ApellidoPaterno","ApellidoMaterno",
+            "Email","Telefono","FechaIngreso","Activo"
+        };
+
+        for (int i = 0; i < headers.Length; i++)
+        {
+            ws.Cell(1, i + 1).Value = headers[i];
+            ws.Cell(1, i + 1).Style.Font.Bold = true;
+        }
+
+        var r = 2;
+        foreach (var x in rows)
+        {
+            ws.Cell(r, 1).Value = x.Id;
+            ws.Cell(r, 2).Value = x.NumEmpleado;
+            ws.Cell(r, 3).Value = x.Nombres;
+            ws.Cell(r, 4).Value = x.ApellidoPaterno;
+            ws.Cell(r, 5).Value = x.ApellidoMaterno ?? "";
+            ws.Cell(r, 6).Value = x.Email ?? "";
+            ws.Cell(r, 7).Value = x.Telefono ?? "";
+
+            // ✅ DateOnly -> DateTime (Excel lo entiende perfecto)
+            if (x.FechaIngreso is DateOnly d)
+                ws.Cell(r, 8).Value = d.ToDateTime(TimeOnly.MinValue);
+            else
+                ws.Cell(r, 8).Value = ""; // por si algún día lo haces nullable
+
+            ws.Cell(r, 9).Value = x.Activo;
+            r++;
+        }
+
+        ws.Column(8).Style.DateFormat.Format = "yyyy-mm-dd";
+        ws.SheetView.FreezeRows(1);
+        ws.Columns().AdjustToContents();
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+
+        var bytes = ms.ToArray();
+        var fileName = $"empleados_{DateTime.UtcNow:yyyyMMdd_HHmmss}.xlsx";
+
+        return File(bytes,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            fileName);
+    }
+
     // ✅ Crear cuenta para empleado (solo ADMIN)
     [Authorize(Roles = "ADMIN")]
     [HttpPost("{id:int}/create-account")]
@@ -92,14 +183,22 @@ public class EmpleadosController : ControllerBase
         var alreadyLinked = await _db.Users.AnyAsync(u => u.EmpleadoId == id);
         if (alreadyLinked) return Conflict(new { message = "Este empleado ya tiene cuenta." });
 
-        var email = dto.Email.Trim().ToLowerInvariant();
+        var emailRaw = dto.Email?.Trim();
+        if (string.IsNullOrWhiteSpace(emailRaw))
+            return BadRequest(new { message = "Email es requerido." });
+
+        var email = emailRaw.ToLowerInvariant();
         var emailExists = await _db.Users.AnyAsync(u => u.Email.ToLower() == email);
         if (emailExists) return Conflict(new { message = "Email ya existe." });
+
+        var role = (dto.Role ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(role))
+            return BadRequest(new { message = "Role es requerido." });
 
         var user = new AppUser
         {
             Email = email,
-            Role = dto.Role.Trim(),
+            Role = role,
             IsActive = dto.IsActive,
             EmpleadoId = id,
             MustChangePassword = true,
