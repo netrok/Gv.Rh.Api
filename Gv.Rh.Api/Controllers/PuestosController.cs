@@ -111,7 +111,9 @@ public class PuestosController : ControllerBase
             })
             .FirstOrDefaultAsync();
 
-        return item is null ? NotFound(new { message = "Puesto no existe." }) : Ok(item);
+        return item is null
+            ? NotFound(new { message = "Puesto no existe." })
+            : Ok(item);
     }
 
     [HttpPost]
@@ -121,10 +123,10 @@ public class PuestosController : ControllerBase
         var nombre = dto.Nombre.Trim();
 
         var departamento = await _db.Departamentos
-            .FirstOrDefaultAsync(x => x.Id == dto.DepartamentoId);
+            .FirstOrDefaultAsync(x => x.Id == dto.DepartamentoId && x.Activo);
 
         if (departamento is null)
-            return BadRequest(new { message = "El departamento indicado no existe." });
+            return BadRequest(new { message = "El departamento indicado no existe o está inactivo." });
 
         var existsByClave = await _db.Puestos.AnyAsync(x => x.Clave == clave);
         if (existsByClave)
@@ -143,7 +145,7 @@ public class PuestosController : ControllerBase
         _db.Puestos.Add(entity);
         await _db.SaveChangesAsync();
 
-        var result = new PuestoDto
+        return CreatedAtAction(nameof(GetById), new { id = entity.Id }, new PuestoDto
         {
             Id = entity.Id,
             Clave = entity.Clave,
@@ -153,9 +155,7 @@ public class PuestosController : ControllerBase
             Activo = entity.Activo,
             CreatedAtUtc = entity.CreatedAtUtc,
             UpdatedAtUtc = entity.UpdatedAtUtc
-        };
-
-        return CreatedAtAction(nameof(GetById), new { id = entity.Id }, result);
+        });
     }
 
     [HttpPut("{id:int}")]
@@ -166,10 +166,10 @@ public class PuestosController : ControllerBase
             return NotFound(new { message = "Puesto no existe." });
 
         var departamento = await _db.Departamentos
-            .FirstOrDefaultAsync(x => x.Id == dto.DepartamentoId);
+            .FirstOrDefaultAsync(x => x.Id == dto.DepartamentoId && x.Activo);
 
         if (departamento is null)
-            return BadRequest(new { message = "El departamento indicado no existe." });
+            return BadRequest(new { message = "El departamento indicado no existe o está inactivo." });
 
         var clave = dto.Clave.Trim().ToUpperInvariant();
         var nombre = dto.Nombre.Trim();
@@ -177,6 +177,13 @@ public class PuestosController : ControllerBase
         var existsByClave = await _db.Puestos.AnyAsync(x => x.Id != id && x.Clave == clave);
         if (existsByClave)
             return Conflict(new { message = "Ya existe otro puesto con esa clave." });
+
+        if (!dto.Activo && entity.Activo)
+        {
+            var validationError = await ValidateCanDeactivateAsync(id);
+            if (validationError is not null)
+                return validationError;
+        }
 
         entity.Clave = clave;
         entity.Nombre = nombre;
@@ -209,11 +216,14 @@ public class PuestosController : ControllerBase
         if (!entity.Activo)
             return NoContent();
 
+        var validationError = await ValidateCanDeactivateAsync(id);
+        if (validationError is not null)
+            return validationError;
+
         entity.Activo = false;
         entity.UpdatedAtUtc = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
-
         return NoContent();
     }
 
@@ -231,7 +241,21 @@ public class PuestosController : ControllerBase
         entity.UpdatedAtUtc = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
-
         return NoContent();
+    }
+
+    private async Task<IActionResult?> ValidateCanDeactivateAsync(int puestoId)
+    {
+        var tieneEmpleados = await _db.Empleados
+            .AsNoTracking()
+            .AnyAsync(x => x.PuestoId == puestoId);
+
+        if (tieneEmpleados)
+            return Conflict(new
+            {
+                message = "No se puede desactivar el puesto porque tiene empleados relacionados."
+            });
+
+        return null;
     }
 }

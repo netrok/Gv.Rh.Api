@@ -98,7 +98,9 @@ public class DepartamentosController : ControllerBase
             })
             .FirstOrDefaultAsync();
 
-        return item is null ? NotFound(new { message = "Departamento no existe." }) : Ok(item);
+        return item is null
+            ? NotFound(new { message = "Departamento no existe." })
+            : Ok(item);
     }
 
     [HttpPost]
@@ -123,7 +125,7 @@ public class DepartamentosController : ControllerBase
         _db.Departamentos.Add(entity);
         await _db.SaveChangesAsync();
 
-        var result = new DepartamentoDto
+        return CreatedAtAction(nameof(GetById), new { id = entity.Id }, new DepartamentoDto
         {
             Id = entity.Id,
             Clave = entity.Clave,
@@ -131,9 +133,7 @@ public class DepartamentosController : ControllerBase
             Activo = entity.Activo,
             CreatedAtUtc = entity.CreatedAtUtc,
             UpdatedAtUtc = entity.UpdatedAtUtc
-        };
-
-        return CreatedAtAction(nameof(GetById), new { id = entity.Id }, result);
+        });
     }
 
     [HttpPut("{id:int}")]
@@ -149,6 +149,13 @@ public class DepartamentosController : ControllerBase
         var existsByClave = await _db.Departamentos.AnyAsync(x => x.Id != id && x.Clave == clave);
         if (existsByClave)
             return Conflict(new { message = "Ya existe otro departamento con esa clave." });
+
+        if (!dto.Activo && entity.Activo)
+        {
+            var validationError = await ValidateCanDeactivateAsync(id);
+            if (validationError is not null)
+                return validationError;
+        }
 
         entity.Clave = clave;
         entity.Nombre = nombre;
@@ -178,11 +185,14 @@ public class DepartamentosController : ControllerBase
         if (!entity.Activo)
             return NoContent();
 
+        var validationError = await ValidateCanDeactivateAsync(id);
+        if (validationError is not null)
+            return validationError;
+
         entity.Activo = false;
         entity.UpdatedAtUtc = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
-
         return NoContent();
     }
 
@@ -200,7 +210,31 @@ public class DepartamentosController : ControllerBase
         entity.UpdatedAtUtc = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
-
         return NoContent();
+    }
+
+    private async Task<IActionResult?> ValidateCanDeactivateAsync(int departamentoId)
+    {
+        var tienePuestosActivos = await _db.Puestos
+            .AsNoTracking()
+            .AnyAsync(x => x.DepartamentoId == departamentoId && x.Activo);
+
+        if (tienePuestosActivos)
+            return Conflict(new
+            {
+                message = "No se puede desactivar el departamento porque tiene puestos activos relacionados."
+            });
+
+        var tieneEmpleados = await _db.Empleados
+            .AsNoTracking()
+            .AnyAsync(x => x.DepartamentoId == departamentoId);
+
+        if (tieneEmpleados)
+            return Conflict(new
+            {
+                message = "No se puede desactivar el departamento porque tiene empleados relacionados."
+            });
+
+        return null;
     }
 }
