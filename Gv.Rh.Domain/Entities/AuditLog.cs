@@ -4,25 +4,29 @@ public class AuditLog
 {
     public long Id { get; set; }
 
-    // Se setea normalmente desde el interceptor; dejamos default por seguridad.
+    // Fecha real del evento en UTC
     public DateTime OccurredAtUtc { get; set; } = DateTime.UtcNow;
 
+    // Usuario que ejecutó la acción
     public int? UserId { get; set; }
-    public string? Email { get; set; }
-    public string? Role { get; set; }
+    public string? UserEmail { get; set; }
+    public string? UserRole { get; set; }
 
-    // CREATE/UPDATE/DELETE/RESTORE/SOFT_DELETE/etc.
+    // CREATE, UPDATE, SOFT_DELETE, RESTORE, DELETE, etc.
     public string Action { get; set; } = default!;
 
-    // Empleado, AppUser, etc.
-    public string Entity { get; set; } = default!;
+    // Empleado, Departamento, Puesto, AppUser, etc.
+    public string EntityName { get; set; } = default!;
 
-    // En tu esquema actual es requerido
-    public string EntityId { get; set; } = default!;
+    // Se deja string para soportar cualquier PK
+    public string RecordId { get; set; } = default!;
 
-    public string? Ip { get; set; }
+    // Contexto técnico útil
+    public string? IpAddress { get; set; }
     public string? UserAgent { get; set; }
 
-    // Before/After en JSON (jsonb en PostgreSQL)
-    public string? ChangesJson { get; set; }
+    // JSONs separados para auditoría seria
+    public string? OldValuesJson { get; set; }
+    public string? NewValuesJson { get; set; }
+    public string? ChangedColumnsJson { get; set; }
 }

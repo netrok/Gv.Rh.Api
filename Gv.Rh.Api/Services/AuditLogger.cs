@@ -36,24 +36,35 @@ public sealed class AuditLogger
         var (uid, email, role) = GetActor(ctx.User, user);
 
         var ip = ctx.Connection.RemoteIpAddress?.ToString();
-        var ua = ctx.Request.Headers.UserAgent.ToString();
 
-        // Entity/EntityId para agrupar auth
-        var entity = "Auth";
-        var entityId = user is not null ? user.Id.ToString() : (uid?.ToString() ?? (email ?? "unknown"));
+        var userAgent = ctx.Request.Headers["User-Agent"].ToString();
+        if (string.IsNullOrWhiteSpace(userAgent))
+            userAgent = null;
+
+        // Para agrupar eventos de autenticación
+        var entityName = "Auth";
+        var recordId = user is not null
+            ? user.Id.ToString()
+            : (uid?.ToString() ?? (email ?? "unknown"));
+
+        var newValuesJson = data is null
+            ? null
+            : JsonSerializer.Serialize(data, JsonOpts);
 
         var log = new AuditLog
         {
             OccurredAtUtc = DateTime.UtcNow,
             UserId = uid,
-            Email = email,
-            Role = role,
+            UserEmail = email,
+            UserRole = role,
             Action = action,
-            Entity = entity,
-            EntityId = entityId,
-            Ip = ip,
-            UserAgent = string.IsNullOrWhiteSpace(ua) ? null : ua,
-            ChangesJson = data is null ? null : JsonSerializer.Serialize(data, JsonOpts)
+            EntityName = entityName,
+            RecordId = recordId,
+            IpAddress = ip,
+            UserAgent = userAgent,
+            OldValuesJson = null,
+            NewValuesJson = newValuesJson,
+            ChangedColumnsJson = null
         };
 
         _db.AuditLogs.Add(log);
@@ -73,7 +84,8 @@ public sealed class AuditLogger
         var email = principal.FindFirstValue(JwtRegisteredClaimNames.Email)
                    ?? principal.FindFirstValue(ClaimTypes.Email);
 
-        var role = principal.FindFirstValue(ClaimTypes.Role);
+        var role = principal.FindFirstValue(ClaimTypes.Role)
+                  ?? principal.Claims.FirstOrDefault(c => c.Type == "role")?.Value;
 
         return (uid, email, role);
     }

@@ -15,19 +15,21 @@ public class AuditController : ControllerBase
 {
     private readonly RhDbContext _db;
 
-    // Json options base (sin indentado)
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = false
     };
 
-    public AuditController(RhDbContext db) => _db = db;
+    public AuditController(RhDbContext db)
+    {
+        _db = db;
+    }
 
-    // GET /api/audit?entity=Empleado&entityId=123&action=UPDATE&email=rrhh@rh.local&from=2026-03-01&to=2026-03-04&q=algo&page=1&pageSize=50
+    // GET /api/audit?entityName=Empleado&recordId=123&action=UPDATE&email=rrhh@rh.local&from=2026-03-01&to=2026-03-04&q=algo&page=1&pageSize=50
     [HttpGet]
     public async Task<IActionResult> List(
-        [FromQuery] string? entity = null,
-        [FromQuery] string? entityId = null,
+        [FromQuery] string? entityName = null,
+        [FromQuery] string? recordId = null,
         [FromQuery] string? action = null,
         [FromQuery] string? email = null,
         [FromQuery] DateTime? from = null,
@@ -39,7 +41,15 @@ public class AuditController : ControllerBase
         page = Math.Max(page, 1);
         pageSize = Math.Clamp(pageSize, 1, 200);
 
-        var query = ApplyFilters(_db.AuditLogs.AsNoTracking(), entity, entityId, action, email, from, to, q)
+        var query = ApplyFilters(
+                _db.AuditLogs.AsNoTracking(),
+                entityName,
+                recordId,
+                action,
+                email,
+                from,
+                to,
+                q)
             .OrderByDescending(x => x.OccurredAtUtc)
             .ThenByDescending(x => x.Id);
 
@@ -53,12 +63,12 @@ public class AuditController : ControllerBase
                 x.Id,
                 x.OccurredAtUtc,
                 x.Action,
-                x.Entity,
-                x.EntityId,
+                x.EntityName,
+                x.RecordId,
                 x.UserId,
-                x.Email,
-                x.Role,
-                x.Ip,
+                x.UserEmail,
+                x.UserRole,
+                x.IpAddress,
                 x.UserAgent
             })
             .ToListAsync();
@@ -77,60 +87,86 @@ public class AuditController : ControllerBase
     [HttpGet("{id:long}")]
     public async Task<IActionResult> GetById(long id, [FromQuery] bool pretty = false)
     {
-        var item = await _db.AuditLogs.AsNoTracking()
+        var item = await _db.AuditLogs
+            .AsNoTracking()
             .FirstOrDefaultAsync(x => x.Id == id);
 
-        if (item is null) return NotFound();
+        if (item is null)
+            return NotFound();
 
-        var changes = item.ChangesJson;
-        if (pretty && !string.IsNullOrWhiteSpace(changes))
-            changes = PrettyJsonOrOriginal(changes);
+        var oldValuesJson = item.OldValuesJson;
+        var newValuesJson = item.NewValuesJson;
+        var changedColumnsJson = item.ChangedColumnsJson;
+
+        if (pretty)
+        {
+            if (!string.IsNullOrWhiteSpace(oldValuesJson))
+                oldValuesJson = PrettyJsonOrOriginal(oldValuesJson);
+
+            if (!string.IsNullOrWhiteSpace(newValuesJson))
+                newValuesJson = PrettyJsonOrOriginal(newValuesJson);
+
+            if (!string.IsNullOrWhiteSpace(changedColumnsJson))
+                changedColumnsJson = PrettyJsonOrOriginal(changedColumnsJson);
+        }
 
         return Ok(new
         {
             item.Id,
             item.OccurredAtUtc,
             item.UserId,
-            item.Email,
-            item.Role,
+            item.UserEmail,
+            item.UserRole,
             item.Action,
-            item.Entity,
-            item.EntityId,
-            item.Ip,
+            item.EntityName,
+            item.RecordId,
+            item.IpAddress,
             item.UserAgent,
-            ChangesJson = changes
+            item.OldValuesJson,
+            item.NewValuesJson,
+            item.ChangedColumnsJson
         });
     }
 
-    // GET /api/audit/export.xlsx?from=...&to=...&entity=...&action=...&email=...&q=...
+    // GET /api/audit/export.xlsx?from=...&to=...&entityName=...&action=...&email=...&q=...
     [HttpGet("export.xlsx")]
     public async Task<IActionResult> ExportXlsx(
-        [FromQuery] string? entity = null,
-        [FromQuery] string? entityId = null,
+        [FromQuery] string? entityName = null,
+        [FromQuery] string? recordId = null,
         [FromQuery] string? action = null,
         [FromQuery] string? email = null,
         [FromQuery] DateTime? from = null,
         [FromQuery] DateTime? to = null,
         [FromQuery] string? q = null)
     {
-        var query = ApplyFilters(_db.AuditLogs.AsNoTracking(), entity, entityId, action, email, from, to, q)
+        var query = ApplyFilters(
+                _db.AuditLogs.AsNoTracking(),
+                entityName,
+                recordId,
+                action,
+                email,
+                from,
+                to,
+                q)
             .OrderByDescending(x => x.OccurredAtUtc)
             .ThenByDescending(x => x.Id)
-            .Take(50000); // límite sano
+            .Take(50000);
 
         var rows = await query
             .Select(x => new
             {
                 x.Id,
                 x.OccurredAtUtc,
-                x.Email,
-                x.Role,
+                x.UserEmail,
+                x.UserRole,
                 x.Action,
-                x.Entity,
-                x.EntityId,
-                x.Ip,
+                x.EntityName,
+                x.RecordId,
+                x.IpAddress,
                 x.UserAgent,
-                x.ChangesJson
+                x.OldValuesJson,
+                x.NewValuesJson,
+                x.ChangedColumnsJson
             })
             .ToListAsync();
 
@@ -139,8 +175,18 @@ public class AuditController : ControllerBase
 
         var headers = new[]
         {
-            "Id", "OccurredAtUtc", "Email", "Role", "Action",
-            "Entity", "EntityId", "IP", "UserAgent", "ChangesJson"
+            "Id",
+            "OccurredAtUtc",
+            "UserEmail",
+            "UserRole",
+            "Action",
+            "EntityName",
+            "RecordId",
+            "IpAddress",
+            "UserAgent",
+            "OldValuesJson",
+            "NewValuesJson",
+            "ChangedColumnsJson"
         };
 
         for (int i = 0; i < headers.Length; i++)
@@ -154,14 +200,16 @@ public class AuditController : ControllerBase
         {
             ws.Cell(r, 1).Value = x.Id;
             ws.Cell(r, 2).Value = x.OccurredAtUtc;
-            ws.Cell(r, 3).Value = x.Email ?? "";
-            ws.Cell(r, 4).Value = x.Role ?? "";
+            ws.Cell(r, 3).Value = x.UserEmail ?? "";
+            ws.Cell(r, 4).Value = x.UserRole ?? "";
             ws.Cell(r, 5).Value = x.Action;
-            ws.Cell(r, 6).Value = x.Entity;
-            ws.Cell(r, 7).Value = x.EntityId;
-            ws.Cell(r, 8).Value = x.Ip ?? "";
+            ws.Cell(r, 6).Value = x.EntityName;
+            ws.Cell(r, 7).Value = x.RecordId;
+            ws.Cell(r, 8).Value = x.IpAddress ?? "";
             ws.Cell(r, 9).Value = x.UserAgent ?? "";
-            ws.Cell(r, 10).Value = x.ChangesJson ?? "";
+            ws.Cell(r, 10).Value = x.OldValuesJson ?? "";
+            ws.Cell(r, 11).Value = x.NewValuesJson ?? "";
+            ws.Cell(r, 12).Value = x.ChangedColumnsJson ?? "";
             r++;
         }
 
@@ -173,28 +221,29 @@ public class AuditController : ControllerBase
         wb.SaveAs(ms);
 
         var bytes = ms.ToArray();
-        var fileName = BuildAuditFileName(from, to, entity, action);
+        var fileName = BuildAuditFileName(from, to, entityName, action);
 
-        return File(bytes,
+        return File(
+            bytes,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             fileName);
     }
 
     private static IQueryable<AuditLog> ApplyFilters(
         IQueryable<AuditLog> qset,
-        string? entity,
-        string? entityId,
+        string? entityName,
+        string? recordId,
         string? action,
         string? email,
         DateTime? from,
         DateTime? to,
         string? q)
     {
-        if (!string.IsNullOrWhiteSpace(entity))
-            qset = qset.Where(x => x.Entity == entity.Trim());
+        if (!string.IsNullOrWhiteSpace(entityName))
+            qset = qset.Where(x => x.EntityName == entityName.Trim());
 
-        if (!string.IsNullOrWhiteSpace(entityId))
-            qset = qset.Where(x => x.EntityId == entityId.Trim());
+        if (!string.IsNullOrWhiteSpace(recordId))
+            qset = qset.Where(x => x.RecordId == recordId.Trim());
 
         if (!string.IsNullOrWhiteSpace(action))
             qset = qset.Where(x => x.Action == action.Trim());
@@ -202,7 +251,9 @@ public class AuditController : ControllerBase
         if (!string.IsNullOrWhiteSpace(email))
         {
             var term = email.Trim();
-            qset = qset.Where(x => x.Email != null && EF.Functions.ILike(x.Email, $"%{term}%"));
+            qset = qset.Where(x =>
+                x.UserEmail != null &&
+                EF.Functions.ILike(x.UserEmail, $"%{term}%"));
         }
 
         if (from.HasValue)
@@ -214,12 +265,17 @@ public class AuditController : ControllerBase
         if (!string.IsNullOrWhiteSpace(q))
         {
             var term = q.Trim();
+
             qset = qset.Where(x =>
-                (x.Email != null && EF.Functions.ILike(x.Email, $"%{term}%")) ||
-                EF.Functions.ILike(x.Entity, $"%{term}%") ||
+                (x.UserEmail != null && EF.Functions.ILike(x.UserEmail, $"%{term}%")) ||
+                (x.UserRole != null && EF.Functions.ILike(x.UserRole, $"%{term}%")) ||
+                EF.Functions.ILike(x.EntityName, $"%{term}%") ||
                 EF.Functions.ILike(x.Action, $"%{term}%") ||
-                (x.EntityId != null && EF.Functions.ILike(x.EntityId, $"%{term}%")) ||
-                (x.ChangesJson != null && EF.Functions.ILike(x.ChangesJson, $"%{term}%"))
+                EF.Functions.ILike(x.RecordId, $"%{term}%") ||
+                (x.IpAddress != null && EF.Functions.ILike(x.IpAddress, $"%{term}%")) ||
+                (x.OldValuesJson != null && EF.Functions.ILike(x.OldValuesJson, $"%{term}%")) ||
+                (x.NewValuesJson != null && EF.Functions.ILike(x.NewValuesJson, $"%{term}%")) ||
+                (x.ChangedColumnsJson != null && EF.Functions.ILike(x.ChangedColumnsJson, $"%{term}%"))
             );
         }
 
@@ -228,9 +284,9 @@ public class AuditController : ControllerBase
 
     private static DateTime ToUtcFrom(DateTime dt)
     {
-        if (dt.Kind == DateTimeKind.Utc) return dt;
+        if (dt.Kind == DateTimeKind.Utc)
+            return dt;
 
-        // Si viene Unspecified (ej. "2026-03-01"), lo tratamos como local del server
         if (dt.Kind == DateTimeKind.Unspecified)
             dt = DateTime.SpecifyKind(dt, DateTimeKind.Local);
 
@@ -239,21 +295,25 @@ public class AuditController : ControllerBase
 
     private static DateTime ToUtcToInclusive(DateTime dt)
     {
-        // Si te pasan solo fecha (00:00:00), lo tomamos como fin del día
         var v = dt;
+
         if (dt.TimeOfDay == TimeSpan.Zero)
             v = dt.Date.AddDays(1).AddTicks(-1);
 
         return ToUtcFrom(v);
     }
 
-    private static string BuildAuditFileName(DateTime? from, DateTime? to, string? entity, string? action)
+    private static string BuildAuditFileName(DateTime? from, DateTime? to, string? entityName, string? action)
     {
         static string Safe(string? s)
         {
-            if (string.IsNullOrWhiteSpace(s)) return "";
+            if (string.IsNullOrWhiteSpace(s))
+                return "";
+
             var t = s.Trim();
-            foreach (var c in Path.GetInvalidFileNameChars()) t = t.Replace(c, '_');
+            foreach (var c in Path.GetInvalidFileNameChars())
+                t = t.Replace(c, '_');
+
             return t.Length > 40 ? t[..40] : t;
         }
 
@@ -266,8 +326,11 @@ public class AuditController : ControllerBase
             parts.Add($"{f:yyyyMMdd}-{t:yyyyMMdd}");
         }
 
-        if (!string.IsNullOrWhiteSpace(entity)) parts.Add(Safe(entity));
-        if (!string.IsNullOrWhiteSpace(action)) parts.Add(Safe(action));
+        if (!string.IsNullOrWhiteSpace(entityName))
+            parts.Add(Safe(entityName));
+
+        if (!string.IsNullOrWhiteSpace(action))
+            parts.Add(Safe(action));
 
         parts.Add(DateTime.UtcNow.ToString("yyyyMMdd_HHmmss"));
 

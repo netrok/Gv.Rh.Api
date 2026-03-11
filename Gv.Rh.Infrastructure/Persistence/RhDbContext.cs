@@ -5,7 +5,9 @@ namespace Gv.Rh.Infrastructure.Persistence;
 
 public class RhDbContext : DbContext
 {
-    public RhDbContext(DbContextOptions<RhDbContext> options) : base(options) { }
+    public RhDbContext(DbContextOptions<RhDbContext> options) : base(options)
+    {
+    }
 
     public DbSet<Empleado> Empleados => Set<Empleado>();
     public DbSet<Departamento> Departamentos => Set<Departamento>();
@@ -191,42 +193,53 @@ public class RhDbContext : DbContext
             t.HasIndex(x => x.ExpiresAtUtc);
         });
 
-        // ===== Audit Log =====
+        // ===== Audit Logs (versión pro) =====
         modelBuilder.Entity<AuditLog>(a =>
         {
-            a.ToTable("audit_log");
+            a.ToTable("audit_logs");
             a.HasKey(x => x.Id);
 
+            a.Property(x => x.OccurredAtUtc)
+                .IsRequired();
+
             a.Property(x => x.Action)
-                .HasMaxLength(20)
+                .HasMaxLength(50)
                 .IsRequired();
 
-            a.Property(x => x.Entity)
-                .HasMaxLength(80)
+            a.Property(x => x.EntityName)
+                .HasMaxLength(100)
                 .IsRequired();
 
-            a.Property(x => x.EntityId)
-                .HasMaxLength(64)
+            a.Property(x => x.RecordId)
+                .HasMaxLength(100)
                 .IsRequired();
 
-            a.Property(x => x.Email)
-                .HasMaxLength(160);
+            a.Property(x => x.UserEmail)
+                .HasMaxLength(200);
 
-            a.Property(x => x.Role)
-                .HasMaxLength(50);
+            a.Property(x => x.UserRole)
+                .HasMaxLength(100);
 
-            a.Property(x => x.Ip)
-                .HasMaxLength(60);
+            a.Property(x => x.IpAddress)
+                .HasMaxLength(100);
 
             a.Property(x => x.UserAgent)
-                .HasMaxLength(300);
+                .HasMaxLength(1000);
 
-            a.Property(x => x.ChangesJson)
+            a.Property(x => x.OldValuesJson)
+                .HasColumnType("jsonb");
+
+            a.Property(x => x.NewValuesJson)
+                .HasColumnType("jsonb");
+
+            a.Property(x => x.ChangedColumnsJson)
                 .HasColumnType("jsonb");
 
             a.HasIndex(x => x.OccurredAtUtc);
-            a.HasIndex(x => x.Entity);
-            a.HasIndex(x => x.EntityId);
+            a.HasIndex(x => x.Action);
+            a.HasIndex(x => x.EntityName);
+            a.HasIndex(x => x.UserId);
+            a.HasIndex(x => new { x.EntityName, x.RecordId });
         });
     }
 }
