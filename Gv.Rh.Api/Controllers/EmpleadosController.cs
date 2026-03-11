@@ -1,5 +1,5 @@
 ﻿using ClosedXML.Excel;
-using Gv.Rh.Api.Models;
+using Gv.Rh.Application.DTOs.Empleados;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
@@ -16,7 +16,10 @@ public class EmpleadosController : ControllerBase
 {
     private readonly RhDbContext _db;
 
-    public EmpleadosController(RhDbContext db) => _db = db;
+    public EmpleadosController(RhDbContext db)
+    {
+        _db = db;
+    }
 
     [HttpGet]
     public async Task<IActionResult> GetAll(
@@ -38,13 +41,13 @@ public class EmpleadosController : ControllerBase
         if (!string.IsNullOrWhiteSpace(q))
         {
             q = q.Trim();
+
             query = query.Where(e =>
                 EF.Functions.ILike(e.NumEmpleado, $"%{q}%") ||
                 EF.Functions.ILike(e.Nombres, $"%{q}%") ||
                 EF.Functions.ILike(e.ApellidoPaterno, $"%{q}%") ||
                 (e.ApellidoMaterno != null && EF.Functions.ILike(e.ApellidoMaterno, $"%{q}%")) ||
-                (e.Email != null && EF.Functions.ILike(e.Email, $"%{q}%"))
-            );
+                (e.Email != null && EF.Functions.ILike(e.Email, $"%{q}%")));
         }
 
         bool asc = string.Equals(dir, "asc", StringComparison.OrdinalIgnoreCase);
@@ -60,6 +63,7 @@ public class EmpleadosController : ControllerBase
         };
 
         var total = await query.CountAsync();
+
         var items = await query
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
@@ -78,11 +82,13 @@ public class EmpleadosController : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id)
     {
-        var emp = await _db.Empleados.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id);
+        var emp = await _db.Empleados
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == id);
+
         return emp is null ? NotFound() : Ok(emp);
     }
 
-    // GET /api/empleados/export.xlsx?q=...&activo=true
     [HttpGet("export.xlsx")]
     public async Task<IActionResult> ExportXlsx([FromQuery] string? q = null, [FromQuery] bool? activo = null)
     {
@@ -94,19 +100,19 @@ public class EmpleadosController : ControllerBase
         if (!string.IsNullOrWhiteSpace(q))
         {
             var term = q.Trim();
+
             query = query.Where(x =>
                 EF.Functions.ILike(x.NumEmpleado, $"%{term}%") ||
                 EF.Functions.ILike(x.Nombres, $"%{term}%") ||
                 EF.Functions.ILike(x.ApellidoPaterno, $"%{term}%") ||
                 (x.ApellidoMaterno != null && EF.Functions.ILike(x.ApellidoMaterno, $"%{term}%")) ||
                 (x.Email != null && EF.Functions.ILike(x.Email, $"%{term}%")) ||
-                (x.Telefono != null && EF.Functions.ILike(x.Telefono, $"%{term}%"))
-            );
+                (x.Telefono != null && EF.Functions.ILike(x.Telefono, $"%{term}%")));
         }
 
         var rows = await query
             .OrderBy(x => x.NumEmpleado)
-            .Take(50000) // límite sano
+            .Take(50000)
             .Select(x => new
             {
                 x.Id,
@@ -116,7 +122,7 @@ public class EmpleadosController : ControllerBase
                 x.ApellidoMaterno,
                 x.Email,
                 x.Telefono,
-                x.FechaIngreso, // DateOnly / DateOnly?
+                x.FechaIngreso,
                 x.Activo
             })
             .ToListAsync();
@@ -126,8 +132,8 @@ public class EmpleadosController : ControllerBase
 
         var headers = new[]
         {
-            "Id","NumEmpleado","Nombres","ApellidoPaterno","ApellidoMaterno",
-            "Email","Telefono","FechaIngreso","Activo"
+            "Id", "NumEmpleado", "Nombres", "ApellidoPaterno", "ApellidoMaterno",
+            "Email", "Telefono", "FechaIngreso", "Activo"
         };
 
         for (int i = 0; i < headers.Length; i++)
@@ -136,23 +142,18 @@ public class EmpleadosController : ControllerBase
             ws.Cell(1, i + 1).Style.Font.Bold = true;
         }
 
-        var r = 2;
+        int r = 2;
+
         foreach (var x in rows)
         {
             ws.Cell(r, 1).Value = x.Id;
             ws.Cell(r, 2).Value = x.NumEmpleado;
             ws.Cell(r, 3).Value = x.Nombres;
             ws.Cell(r, 4).Value = x.ApellidoPaterno;
-            ws.Cell(r, 5).Value = x.ApellidoMaterno ?? "";
-            ws.Cell(r, 6).Value = x.Email ?? "";
-            ws.Cell(r, 7).Value = x.Telefono ?? "";
-
-            // ✅ DateOnly -> DateTime (Excel lo entiende perfecto)
-            if (x.FechaIngreso is DateOnly d)
-                ws.Cell(r, 8).Value = d.ToDateTime(TimeOnly.MinValue);
-            else
-                ws.Cell(r, 8).Value = ""; // por si algún día lo haces nullable
-
+            ws.Cell(r, 5).Value = x.ApellidoMaterno ?? string.Empty;
+            ws.Cell(r, 6).Value = x.Email ?? string.Empty;
+            ws.Cell(r, 7).Value = x.Telefono ?? string.Empty;
+            ws.Cell(r, 8).Value = x.FechaIngreso.ToDateTime(TimeOnly.MinValue);
             ws.Cell(r, 9).Value = x.Activo;
             r++;
         }
@@ -167,33 +168,42 @@ public class EmpleadosController : ControllerBase
         var bytes = ms.ToArray();
         var fileName = $"empleados_{DateTime.UtcNow:yyyyMMdd_HHmmss}.xlsx";
 
-        return File(bytes,
+        return File(
+            bytes,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             fileName);
     }
 
-    // ✅ Crear cuenta para empleado (solo ADMIN)
     [Authorize(Roles = "ADMIN")]
     [HttpPost("{id:int}/create-account")]
     public async Task<IActionResult> CreateAccount(int id, [FromBody] CreateAccountForEmpleadoDto dto)
     {
-        var empleadoExists = await _db.Empleados.AsNoTracking().AnyAsync(x => x.Id == id);
-        if (!empleadoExists) return NotFound(new { message = "Empleado no existe." });
+        var empleadoExists = await _db.Empleados
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id);
+
+        if (!empleadoExists)
+            return NotFound(new { message = "Empleado no existe." });
 
         var alreadyLinked = await _db.Users.AnyAsync(u => u.EmpleadoId == id);
-        if (alreadyLinked) return Conflict(new { message = "Este empleado ya tiene cuenta." });
+        if (alreadyLinked)
+            return Conflict(new { message = "Este empleado ya tiene cuenta." });
 
-        var emailRaw = dto.Email?.Trim();
-        if (string.IsNullOrWhiteSpace(emailRaw))
+        var email = dto.Email.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(email))
             return BadRequest(new { message = "Email es requerido." });
 
-        var email = emailRaw.ToLowerInvariant();
         var emailExists = await _db.Users.AnyAsync(u => u.Email.ToLower() == email);
-        if (emailExists) return Conflict(new { message = "Email ya existe." });
+        if (emailExists)
+            return Conflict(new { message = "Email ya existe." });
 
-        var role = (dto.Role ?? "").Trim();
+        var role = dto.Role.Trim();
         if (string.IsNullOrWhiteSpace(role))
             return BadRequest(new { message = "Role es requerido." });
+
+        var password = dto.Password.Trim();
+        if (string.IsNullOrWhiteSpace(password))
+            return BadRequest(new { message = "Password es requerido." });
 
         var user = new AppUser
         {
@@ -202,7 +212,7 @@ public class EmpleadosController : ControllerBase
             IsActive = dto.IsActive,
             EmpleadoId = id,
             MustChangePassword = true,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password)
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password)
         };
 
         _db.Users.Add(user);
@@ -211,18 +221,25 @@ public class EmpleadosController : ControllerBase
         return Ok(new
         {
             message = "Cuenta creada y ligada al empleado.",
-            user = new { user.Id, user.Email, user.Role, user.IsActive, user.MustChangePassword, user.EmpleadoId }
+            user = new
+            {
+                user.Id,
+                user.Email,
+                user.Role,
+                user.IsActive,
+                user.MustChangePassword,
+                user.EmpleadoId
+            }
         });
     }
 
-    // ✅ Vincular usuario existente al empleado por email (solo ADMIN)
-    // POST /api/empleados/{id}/link-user-by-email
     [Authorize(Roles = "ADMIN")]
     [HttpPost("{id:int}/link-user-by-email")]
     public async Task<IActionResult> LinkUserByEmail(int id)
     {
         var empleado = await _db.Empleados.FirstOrDefaultAsync(e => e.Id == id);
-        if (empleado is null) return NotFound(new { message = "Empleado no existe." });
+        if (empleado is null)
+            return NotFound(new { message = "Empleado no existe." });
 
         var empEmail = empleado.Email?.Trim().ToLowerInvariant();
         if (string.IsNullOrWhiteSpace(empEmail))
@@ -245,8 +262,24 @@ public class EmpleadosController : ControllerBase
         return Ok(new
         {
             message = "Usuario ligado al empleado por email.",
-            user = new { user.Id, user.Email, user.Role, user.IsActive, user.MustChangePassword, user.EmpleadoId },
-            empleado = new { empleado.Id, empleado.NumEmpleado, empleado.Nombres, empleado.ApellidoPaterno, empleado.ApellidoMaterno, empleado.Email }
+            user = new
+            {
+                user.Id,
+                user.Email,
+                user.Role,
+                user.IsActive,
+                user.MustChangePassword,
+                user.EmpleadoId
+            },
+            empleado = new
+            {
+                empleado.Id,
+                empleado.NumEmpleado,
+                empleado.Nombres,
+                empleado.ApellidoPaterno,
+                empleado.ApellidoMaterno,
+                empleado.Email
+            }
         });
     }
 
@@ -279,7 +312,8 @@ public class EmpleadosController : ControllerBase
     public async Task<IActionResult> Update(int id, [FromBody] EmpleadoUpdateDto dto)
     {
         var entity = await _db.Empleados.FirstOrDefaultAsync(x => x.Id == id);
-        if (entity is null) return NotFound();
+        if (entity is null)
+            return NotFound();
 
         entity.Nombres = dto.Nombres.Trim();
         entity.ApellidoPaterno = dto.ApellidoPaterno.Trim();
@@ -298,9 +332,11 @@ public class EmpleadosController : ControllerBase
     public async Task<IActionResult> Delete(int id)
     {
         var entity = await _db.Empleados.FirstOrDefaultAsync(x => x.Id == id);
-        if (entity is null) return NotFound();
+        if (entity is null)
+            return NotFound();
 
-        if (!entity.Activo) return NoContent();
+        if (!entity.Activo)
+            return NoContent();
 
         entity.Activo = false;
         await _db.SaveChangesAsync();
@@ -312,9 +348,11 @@ public class EmpleadosController : ControllerBase
     public async Task<IActionResult> Restore(int id)
     {
         var entity = await _db.Empleados.FirstOrDefaultAsync(x => x.Id == id);
-        if (entity is null) return NotFound();
+        if (entity is null)
+            return NotFound();
 
-        if (entity.Activo) return NoContent();
+        if (entity.Activo)
+            return NoContent();
 
         entity.Activo = true;
         await _db.SaveChangesAsync();

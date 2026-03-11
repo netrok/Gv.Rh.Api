@@ -30,4 +30,8 @@
 		<ProjectReference Include="..\Gv.Rh.Infrastructure\Gv.Rh.Infrastructure.csproj" />
 	</ItemGroup>
 
+	<ItemGroup>
+	  <Folder Include="Models\" />
+	</ItemGroup>
+
 </Project>

@@ -3,15 +3,16 @@
 public class AppUser
 {
     public int Id { get; set; }
-    public string Email { get; set; } = default!;
-    public string PasswordHash { get; set; } = default!;
+
+    public string Email { get; set; } = string.Empty;
+    public string PasswordHash { get; set; } = string.Empty;
     public string Role { get; set; } = "ADMIN";
     public bool IsActive { get; set; } = true;
     public bool MustChangePassword { get; set; } = false;
 
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
-    // ✅ link opcional a empleado
+    // Link opcional a empleado
     public int? EmpleadoId { get; set; }
     public Empleado? Empleado { get; set; }
 }

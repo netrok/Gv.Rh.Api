@@ -43,6 +43,7 @@ public class RhDbContext : DbContext
             u.Property(x => x.Role).HasMaxLength(50).IsRequired();
             u.Property(x => x.IsActive).IsRequired();
             u.Property(x => x.MustChangePassword).IsRequired();
+            u.Property(x => x.CreatedAtUtc).IsRequired();
 
             u.HasIndex(x => x.Email).IsUnique();
 
@@ -52,7 +53,7 @@ public class RhDbContext : DbContext
                 .HasForeignKey<AppUser>(x => x.EmpleadoId)
                 .OnDelete(DeleteBehavior.SetNull);
 
-            // PostgreSQL: UNIQUE permite múltiples NULLs.
+            // PostgreSQL permite múltiples NULL en índices únicos
             u.HasIndex(x => x.EmpleadoId).IsUnique();
         });
 
@@ -79,7 +80,7 @@ public class RhDbContext : DbContext
             t.HasIndex(x => x.ExpiresAtUtc);
         });
 
-        // ===== Audit Log (modelo ACTUAL: Email/Role/Entity/EntityId) =====
+        // ===== Audit Log =====
         modelBuilder.Entity<AuditLog>(a =>
         {
             a.ToTable("audit_log");

@@ -1,8 +1,8 @@
 ﻿using System.ComponentModel.DataAnnotations;
 
-namespace Gv.Rh.Api.Models;
+namespace Gv.Rh.Application.DTOs.Empleados;
 
-public class EmpleadoCreateDto
+public class EmpleadoUpdateDto
 {
     [Required, StringLength(120, MinimumLength = 2)]
     public string Nombres { get; set; } = default!;
@@ -24,5 +24,5 @@ public class EmpleadoCreateDto
     [Required]
     public DateOnly FechaIngreso { get; set; }
 
-    public bool Activo { get; set; } = true;
+    public bool Activo { get; set; }
 }
