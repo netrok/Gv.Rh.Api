@@ -105,7 +105,19 @@ public class RhDbContext : DbContext
             e.Property(x => x.Email)
                 .HasMaxLength(160);
 
+            e.HasOne(x => x.Departamento)
+                .WithMany()
+                .HasForeignKey(x => x.DepartamentoId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.Puesto)
+                .WithMany()
+                .HasForeignKey(x => x.PuestoId)
+                .OnDelete(DeleteBehavior.Restrict);
+
             e.HasIndex(x => x.NumEmpleado).IsUnique();
+            e.HasIndex(x => x.DepartamentoId);
+            e.HasIndex(x => x.PuestoId);
         });
 
         // ===== Users =====

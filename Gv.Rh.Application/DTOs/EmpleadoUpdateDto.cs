@@ -5,10 +5,10 @@ namespace Gv.Rh.Application.DTOs.Empleados;
 public class EmpleadoUpdateDto
 {
     [Required, StringLength(120, MinimumLength = 2)]
-    public string Nombres { get; set; } = default!;
+    public string Nombres { get; set; } = string.Empty;
 
     [Required, StringLength(120, MinimumLength = 2)]
-    public string ApellidoPaterno { get; set; } = default!;
+    public string ApellidoPaterno { get; set; } = string.Empty;
 
     [StringLength(120)]
     public string? ApellidoMaterno { get; set; }
@@ -25,4 +25,7 @@ public class EmpleadoUpdateDto
     public DateOnly FechaIngreso { get; set; }
 
     public bool Activo { get; set; }
+
+    public int? DepartamentoId { get; set; }
+    public int? PuestoId { get; set; }
 }

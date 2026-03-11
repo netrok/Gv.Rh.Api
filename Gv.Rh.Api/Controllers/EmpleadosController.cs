@@ -27,16 +27,27 @@ public class EmpleadosController : ControllerBase
         [FromQuery] int pageSize = 20,
         [FromQuery] string? q = null,
         [FromQuery] bool? activo = true,
+        [FromQuery] int? departamentoId = null,
+        [FromQuery] int? puestoId = null,
         [FromQuery] string sort = "id",
         [FromQuery] string dir = "desc")
     {
         page = Math.Max(page, 1);
         pageSize = Math.Clamp(pageSize, 1, 200);
 
-        IQueryable<Empleado> query = _db.Empleados.AsNoTracking();
+        IQueryable<Empleado> query = _db.Empleados
+            .AsNoTracking()
+            .Include(x => x.Departamento)
+            .Include(x => x.Puesto);
 
         if (activo.HasValue)
             query = query.Where(e => e.Activo == activo.Value);
+
+        if (departamentoId.HasValue)
+            query = query.Where(e => e.DepartamentoId == departamentoId.Value);
+
+        if (puestoId.HasValue)
+            query = query.Where(e => e.PuestoId == puestoId.Value);
 
         if (!string.IsNullOrWhiteSpace(q))
         {
@@ -47,7 +58,10 @@ public class EmpleadosController : ControllerBase
                 EF.Functions.ILike(e.Nombres, $"%{q}%") ||
                 EF.Functions.ILike(e.ApellidoPaterno, $"%{q}%") ||
                 (e.ApellidoMaterno != null && EF.Functions.ILike(e.ApellidoMaterno, $"%{q}%")) ||
-                (e.Email != null && EF.Functions.ILike(e.Email, $"%{q}%")));
+                (e.Email != null && EF.Functions.ILike(e.Email, $"%{q}%")) ||
+                (e.Departamento != null && EF.Functions.ILike(e.Departamento.Nombre, $"%{q}%")) ||
+                (e.Puesto != null && EF.Functions.ILike(e.Puesto.Nombre, $"%{q}%"))
+            );
         }
 
         bool asc = string.Equals(dir, "asc", StringComparison.OrdinalIgnoreCase);
@@ -58,6 +72,8 @@ public class EmpleadosController : ControllerBase
             "nombre" or "nombres" => asc ? query.OrderBy(x => x.Nombres) : query.OrderByDescending(x => x.Nombres),
             "apellido" or "apellidopaterno" => asc ? query.OrderBy(x => x.ApellidoPaterno) : query.OrderByDescending(x => x.ApellidoPaterno),
             "fechaingreso" => asc ? query.OrderBy(x => x.FechaIngreso) : query.OrderByDescending(x => x.FechaIngreso),
+            "departamento" => asc ? query.OrderBy(x => x.Departamento!.Nombre) : query.OrderByDescending(x => x.Departamento!.Nombre),
+            "puesto" => asc ? query.OrderBy(x => x.Puesto!.Nombre) : query.OrderByDescending(x => x.Puesto!.Nombre),
             "activo" => asc ? query.OrderBy(x => x.Activo) : query.OrderByDescending(x => x.Activo),
             _ => asc ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id),
         };
@@ -67,6 +83,7 @@ public class EmpleadosController : ControllerBase
         var items = await query
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
+            .Select(x => ToDto(x))
             .ToListAsync();
 
         return Ok(new
@@ -84,18 +101,36 @@ public class EmpleadosController : ControllerBase
     {
         var emp = await _db.Empleados
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Id == id);
+            .Include(x => x.Departamento)
+            .Include(x => x.Puesto)
+            .Where(x => x.Id == id)
+            .Select(x => ToDto(x))
+            .FirstOrDefaultAsync();
 
         return emp is null ? NotFound() : Ok(emp);
     }
 
     [HttpGet("export.xlsx")]
-    public async Task<IActionResult> ExportXlsx([FromQuery] string? q = null, [FromQuery] bool? activo = null)
+    public async Task<IActionResult> ExportXlsx(
+        [FromQuery] string? q = null,
+        [FromQuery] bool? activo = null,
+        [FromQuery] int? departamentoId = null,
+        [FromQuery] int? puestoId = null)
     {
-        var query = _db.Empleados.AsNoTracking().AsQueryable();
+        var query = _db.Empleados
+            .AsNoTracking()
+            .Include(x => x.Departamento)
+            .Include(x => x.Puesto)
+            .AsQueryable();
 
         if (activo.HasValue)
             query = query.Where(x => x.Activo == activo.Value);
+
+        if (departamentoId.HasValue)
+            query = query.Where(x => x.DepartamentoId == departamentoId.Value);
+
+        if (puestoId.HasValue)
+            query = query.Where(x => x.PuestoId == puestoId.Value);
 
         if (!string.IsNullOrWhiteSpace(q))
         {
@@ -107,7 +142,10 @@ public class EmpleadosController : ControllerBase
                 EF.Functions.ILike(x.ApellidoPaterno, $"%{term}%") ||
                 (x.ApellidoMaterno != null && EF.Functions.ILike(x.ApellidoMaterno, $"%{term}%")) ||
                 (x.Email != null && EF.Functions.ILike(x.Email, $"%{term}%")) ||
-                (x.Telefono != null && EF.Functions.ILike(x.Telefono, $"%{term}%")));
+                (x.Telefono != null && EF.Functions.ILike(x.Telefono, $"%{term}%")) ||
+                (x.Departamento != null && EF.Functions.ILike(x.Departamento.Nombre, $"%{term}%")) ||
+                (x.Puesto != null && EF.Functions.ILike(x.Puesto.Nombre, $"%{term}%"))
+            );
         }
 
         var rows = await query
@@ -123,7 +161,9 @@ public class EmpleadosController : ControllerBase
                 x.Email,
                 x.Telefono,
                 x.FechaIngreso,
-                x.Activo
+                x.Activo,
+                Departamento = x.Departamento != null ? x.Departamento.Nombre : string.Empty,
+                Puesto = x.Puesto != null ? x.Puesto.Nombre : string.Empty
             })
             .ToListAsync();
 
@@ -133,7 +173,7 @@ public class EmpleadosController : ControllerBase
         var headers = new[]
         {
             "Id", "NumEmpleado", "Nombres", "ApellidoPaterno", "ApellidoMaterno",
-            "Email", "Telefono", "FechaIngreso", "Activo"
+            "Email", "Telefono", "FechaIngreso", "Departamento", "Puesto", "Activo"
         };
 
         for (int i = 0; i < headers.Length; i++)
@@ -154,7 +194,9 @@ public class EmpleadosController : ControllerBase
             ws.Cell(r, 6).Value = x.Email ?? string.Empty;
             ws.Cell(r, 7).Value = x.Telefono ?? string.Empty;
             ws.Cell(r, 8).Value = x.FechaIngreso.ToDateTime(TimeOnly.MinValue);
-            ws.Cell(r, 9).Value = x.Activo;
+            ws.Cell(r, 9).Value = x.Departamento;
+            ws.Cell(r, 10).Value = x.Puesto;
+            ws.Cell(r, 11).Value = x.Activo;
             r++;
         }
 
@@ -178,10 +220,7 @@ public class EmpleadosController : ControllerBase
     [HttpPost("{id:int}/create-account")]
     public async Task<IActionResult> CreateAccount(int id, [FromBody] CreateAccountForEmpleadoDto dto)
     {
-        var empleadoExists = await _db.Empleados
-            .AsNoTracking()
-            .AnyAsync(x => x.Id == id);
-
+        var empleadoExists = await _db.Empleados.AsNoTracking().AnyAsync(x => x.Id == id);
         if (!empleadoExists)
             return NotFound(new { message = "Empleado no existe." });
 
@@ -286,6 +325,10 @@ public class EmpleadosController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] EmpleadoCreateDto dto)
     {
+        var relationResult = await ResolveRelationsAsync(dto.DepartamentoId, dto.PuestoId);
+        if (relationResult.Error is not null)
+            return relationResult.Error;
+
         var next = await NextEmpleadoSequenceAsync();
         var numEmpleado = $"EMP-{next:000000}";
 
@@ -299,13 +342,23 @@ public class EmpleadosController : ControllerBase
             Telefono = string.IsNullOrWhiteSpace(dto.Telefono) ? null : dto.Telefono.Trim(),
             Email = string.IsNullOrWhiteSpace(dto.Email) ? null : dto.Email.Trim(),
             FechaIngreso = dto.FechaIngreso,
-            Activo = dto.Activo
+            Activo = dto.Activo,
+            DepartamentoId = relationResult.DepartamentoId,
+            PuestoId = dto.PuestoId
         };
 
         _db.Empleados.Add(entity);
         await _db.SaveChangesAsync();
 
-        return CreatedAtAction(nameof(GetById), new { id = entity.Id }, entity);
+        var created = await _db.Empleados
+            .AsNoTracking()
+            .Include(x => x.Departamento)
+            .Include(x => x.Puesto)
+            .Where(x => x.Id == entity.Id)
+            .Select(x => ToDto(x))
+            .FirstAsync();
+
+        return CreatedAtAction(nameof(GetById), new { id = entity.Id }, created);
     }
 
     [HttpPut("{id:int}")]
@@ -315,6 +368,10 @@ public class EmpleadosController : ControllerBase
         if (entity is null)
             return NotFound();
 
+        var relationResult = await ResolveRelationsAsync(dto.DepartamentoId, dto.PuestoId);
+        if (relationResult.Error is not null)
+            return relationResult.Error;
+
         entity.Nombres = dto.Nombres.Trim();
         entity.ApellidoPaterno = dto.ApellidoPaterno.Trim();
         entity.ApellidoMaterno = string.IsNullOrWhiteSpace(dto.ApellidoMaterno) ? null : dto.ApellidoMaterno.Trim();
@@ -323,9 +380,20 @@ public class EmpleadosController : ControllerBase
         entity.Email = string.IsNullOrWhiteSpace(dto.Email) ? null : dto.Email.Trim();
         entity.FechaIngreso = dto.FechaIngreso;
         entity.Activo = dto.Activo;
+        entity.DepartamentoId = relationResult.DepartamentoId;
+        entity.PuestoId = dto.PuestoId;
 
         await _db.SaveChangesAsync();
-        return Ok(entity);
+
+        var updated = await _db.Empleados
+            .AsNoTracking()
+            .Include(x => x.Departamento)
+            .Include(x => x.Puesto)
+            .Where(x => x.Id == entity.Id)
+            .Select(x => ToDto(x))
+            .FirstAsync();
+
+        return Ok(updated);
     }
 
     [HttpDelete("{id:int}")]
@@ -358,6 +426,60 @@ public class EmpleadosController : ControllerBase
         await _db.SaveChangesAsync();
 
         return NoContent();
+    }
+
+    private async Task<(int? DepartamentoId, IActionResult? Error)> ResolveRelationsAsync(int? departamentoId, int? puestoId)
+    {
+        Departamento? departamento = null;
+        Puesto? puesto = null;
+
+        if (departamentoId.HasValue)
+        {
+            departamento = await _db.Departamentos
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Id == departamentoId.Value && x.Activo);
+
+            if (departamento is null)
+                return (null, BadRequest(new { message = "El departamento indicado no existe o está inactivo." }));
+        }
+
+        if (puestoId.HasValue)
+        {
+            puesto = await _db.Puestos
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Id == puestoId.Value && x.Activo);
+
+            if (puesto is null)
+                return (null, BadRequest(new { message = "El puesto indicado no existe o está inactivo." }));
+
+            if (departamentoId.HasValue && puesto.DepartamentoId != departamentoId.Value)
+                return (null, BadRequest(new { message = "El puesto no pertenece al departamento indicado." }));
+
+            departamentoId = puesto.DepartamentoId;
+        }
+
+        return (departamentoId, null);
+    }
+
+    private static EmpleadoDto ToDto(Empleado x)
+    {
+        return new EmpleadoDto
+        {
+            Id = x.Id,
+            NumEmpleado = x.NumEmpleado,
+            Nombres = x.Nombres,
+            ApellidoPaterno = x.ApellidoPaterno,
+            ApellidoMaterno = x.ApellidoMaterno,
+            FechaNacimiento = x.FechaNacimiento,
+            Telefono = x.Telefono,
+            Email = x.Email,
+            FechaIngreso = x.FechaIngreso,
+            Activo = x.Activo,
+            DepartamentoId = x.DepartamentoId,
+            DepartamentoNombre = x.Departamento != null ? x.Departamento.Nombre : null,
+            PuestoId = x.PuestoId,
+            PuestoNombre = x.Puesto != null ? x.Puesto.Nombre : null
+        };
     }
 
     private async Task<long> NextEmpleadoSequenceAsync()
