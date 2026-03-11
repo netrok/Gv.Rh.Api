@@ -9,6 +9,7 @@ public class RhDbContext : DbContext
 
     public DbSet<Empleado> Empleados => Set<Empleado>();
     public DbSet<Departamento> Departamentos => Set<Departamento>();
+    public DbSet<Puesto> Puestos => Set<Puesto>();
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
@@ -42,6 +43,39 @@ public class RhDbContext : DbContext
 
             d.HasIndex(x => x.Clave).IsUnique();
             d.HasIndex(x => x.Nombre);
+        });
+
+        // ===== Puestos =====
+        modelBuilder.Entity<Puesto>(p =>
+        {
+            p.ToTable("puestos");
+            p.HasKey(x => x.Id);
+
+            p.Property(x => x.Clave)
+                .HasMaxLength(20)
+                .IsRequired();
+
+            p.Property(x => x.Nombre)
+                .HasMaxLength(150)
+                .IsRequired();
+
+            p.Property(x => x.Activo)
+                .IsRequired();
+
+            p.Property(x => x.CreatedAtUtc)
+                .IsRequired();
+
+            p.Property(x => x.UpdatedAtUtc)
+                .IsRequired();
+
+            p.HasOne(x => x.Departamento)
+                .WithMany()
+                .HasForeignKey(x => x.DepartamentoId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            p.HasIndex(x => x.Clave).IsUnique();
+            p.HasIndex(x => x.DepartamentoId);
+            p.HasIndex(x => new { x.DepartamentoId, x.Nombre });
         });
 
         // ===== Empleados =====
