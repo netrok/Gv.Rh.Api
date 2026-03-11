@@ -6,6 +6,6 @@ public class DepartamentoDto
     public string Clave { get; set; } = string.Empty;
     public string Nombre { get; set; } = string.Empty;
     public bool Activo { get; set; }
-    public DateTime CreatedAt { get; set; }
-    public DateTime UpdatedAt { get; set; }
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime UpdatedAtUtc { get; set; }
 }
