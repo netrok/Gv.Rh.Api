@@ -12,6 +12,7 @@ public class RhDbContext : DbContext
     public DbSet<Empleado> Empleados => Set<Empleado>();
     public DbSet<Departamento> Departamentos => Set<Departamento>();
     public DbSet<Puesto> Puestos => Set<Puesto>();
+    public DbSet<Sucursal> Sucursales => Set<Sucursal>();
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
@@ -75,9 +76,37 @@ public class RhDbContext : DbContext
                 .HasForeignKey(x => x.DepartamentoId)
                 .OnDelete(DeleteBehavior.Restrict);
 
+        d:;
             p.HasIndex(x => x.Clave).IsUnique();
             p.HasIndex(x => x.DepartamentoId);
             p.HasIndex(x => new { x.DepartamentoId, x.Nombre });
+        });
+
+        // ===== Sucursales =====
+        modelBuilder.Entity<Sucursal>(s =>
+        {
+            s.ToTable("sucursales");
+            s.HasKey(x => x.Id);
+
+            s.Property(x => x.Clave)
+                .HasMaxLength(20)
+                .IsRequired();
+
+            s.Property(x => x.Nombre)
+                .HasMaxLength(150)
+                .IsRequired();
+
+            s.Property(x => x.Direccion)
+                .HasMaxLength(250);
+
+            s.Property(x => x.Telefono)
+                .HasMaxLength(30);
+
+            s.Property(x => x.Activo)
+                .IsRequired();
+
+            s.HasIndex(x => x.Clave).IsUnique();
+            s.HasIndex(x => x.Nombre);
         });
 
         // ===== Empleados =====
@@ -117,9 +146,15 @@ public class RhDbContext : DbContext
                 .HasForeignKey(x => x.PuestoId)
                 .OnDelete(DeleteBehavior.Restrict);
 
+            e.HasOne(x => x.Sucursal)
+                .WithMany(x => x.Empleados)
+                .HasForeignKey(x => x.SucursalId)
+                .OnDelete(DeleteBehavior.Restrict);
+
             e.HasIndex(x => x.NumEmpleado).IsUnique();
             e.HasIndex(x => x.DepartamentoId);
             e.HasIndex(x => x.PuestoId);
+            e.HasIndex(x => x.SucursalId);
         });
 
         // ===== Users =====
@@ -151,13 +186,11 @@ public class RhDbContext : DbContext
 
             u.HasIndex(x => x.Email).IsUnique();
 
-            // FK opcional a empleado (1 empleado = 0/1 usuario)
             u.HasOne(x => x.Empleado)
                 .WithOne()
                 .HasForeignKey<AppUser>(x => x.EmpleadoId)
                 .OnDelete(DeleteBehavior.SetNull);
 
-            // PostgreSQL permite múltiples NULL en índices únicos
             u.HasIndex(x => x.EmpleadoId).IsUnique();
         });
 
@@ -193,7 +226,7 @@ public class RhDbContext : DbContext
             t.HasIndex(x => x.ExpiresAtUtc);
         });
 
-        // ===== Audit Logs (versión pro) =====
+        // ===== Audit Logs =====
         modelBuilder.Entity<AuditLog>(a =>
         {
             a.ToTable("audit_logs");

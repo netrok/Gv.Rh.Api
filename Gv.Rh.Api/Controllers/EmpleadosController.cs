@@ -29,6 +29,7 @@ public class EmpleadosController : ControllerBase
         [FromQuery] bool? activo = true,
         [FromQuery] int? departamentoId = null,
         [FromQuery] int? puestoId = null,
+        [FromQuery] int? sucursalId = null,
         [FromQuery] string sort = "id",
         [FromQuery] string dir = "desc")
     {
@@ -38,7 +39,8 @@ public class EmpleadosController : ControllerBase
         IQueryable<Empleado> query = _db.Empleados
             .AsNoTracking()
             .Include(x => x.Departamento)
-            .Include(x => x.Puesto);
+            .Include(x => x.Puesto)
+            .Include(x => x.Sucursal);
 
         if (activo.HasValue)
             query = query.Where(e => e.Activo == activo.Value);
@@ -48,6 +50,9 @@ public class EmpleadosController : ControllerBase
 
         if (puestoId.HasValue)
             query = query.Where(e => e.PuestoId == puestoId.Value);
+
+        if (sucursalId.HasValue)
+            query = query.Where(e => e.SucursalId == sucursalId.Value);
 
         if (!string.IsNullOrWhiteSpace(q))
         {
@@ -60,7 +65,9 @@ public class EmpleadosController : ControllerBase
                 (e.ApellidoMaterno != null && EF.Functions.ILike(e.ApellidoMaterno, $"%{q}%")) ||
                 (e.Email != null && EF.Functions.ILike(e.Email, $"%{q}%")) ||
                 (e.Departamento != null && EF.Functions.ILike(e.Departamento.Nombre, $"%{q}%")) ||
-                (e.Puesto != null && EF.Functions.ILike(e.Puesto.Nombre, $"%{q}%"))
+                (e.Puesto != null && EF.Functions.ILike(e.Puesto.Nombre, $"%{q}%")) ||
+                (e.Sucursal != null && EF.Functions.ILike(e.Sucursal.Nombre, $"%{q}%")) ||
+                (e.Sucursal != null && EF.Functions.ILike(e.Sucursal.Clave, $"%{q}%"))
             );
         }
 
@@ -74,6 +81,7 @@ public class EmpleadosController : ControllerBase
             "fechaingreso" => asc ? query.OrderBy(x => x.FechaIngreso) : query.OrderByDescending(x => x.FechaIngreso),
             "departamento" => asc ? query.OrderBy(x => x.Departamento!.Nombre) : query.OrderByDescending(x => x.Departamento!.Nombre),
             "puesto" => asc ? query.OrderBy(x => x.Puesto!.Nombre) : query.OrderByDescending(x => x.Puesto!.Nombre),
+            "sucursal" => asc ? query.OrderBy(x => x.Sucursal!.Nombre) : query.OrderByDescending(x => x.Sucursal!.Nombre),
             "activo" => asc ? query.OrderBy(x => x.Activo) : query.OrderByDescending(x => x.Activo),
             _ => asc ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id),
         };
@@ -103,6 +111,7 @@ public class EmpleadosController : ControllerBase
             .AsNoTracking()
             .Include(x => x.Departamento)
             .Include(x => x.Puesto)
+            .Include(x => x.Sucursal)
             .Where(x => x.Id == id)
             .Select(x => ToDto(x))
             .FirstOrDefaultAsync();
@@ -115,12 +124,14 @@ public class EmpleadosController : ControllerBase
         [FromQuery] string? q = null,
         [FromQuery] bool? activo = null,
         [FromQuery] int? departamentoId = null,
-        [FromQuery] int? puestoId = null)
+        [FromQuery] int? puestoId = null,
+        [FromQuery] int? sucursalId = null)
     {
         var query = _db.Empleados
             .AsNoTracking()
             .Include(x => x.Departamento)
             .Include(x => x.Puesto)
+            .Include(x => x.Sucursal)
             .AsQueryable();
 
         if (activo.HasValue)
@@ -131,6 +142,9 @@ public class EmpleadosController : ControllerBase
 
         if (puestoId.HasValue)
             query = query.Where(x => x.PuestoId == puestoId.Value);
+
+        if (sucursalId.HasValue)
+            query = query.Where(x => x.SucursalId == sucursalId.Value);
 
         if (!string.IsNullOrWhiteSpace(q))
         {
@@ -144,7 +158,9 @@ public class EmpleadosController : ControllerBase
                 (x.Email != null && EF.Functions.ILike(x.Email, $"%{term}%")) ||
                 (x.Telefono != null && EF.Functions.ILike(x.Telefono, $"%{term}%")) ||
                 (x.Departamento != null && EF.Functions.ILike(x.Departamento.Nombre, $"%{term}%")) ||
-                (x.Puesto != null && EF.Functions.ILike(x.Puesto.Nombre, $"%{term}%"))
+                (x.Puesto != null && EF.Functions.ILike(x.Puesto.Nombre, $"%{term}%")) ||
+                (x.Sucursal != null && EF.Functions.ILike(x.Sucursal.Nombre, $"%{term}%")) ||
+                (x.Sucursal != null && EF.Functions.ILike(x.Sucursal.Clave, $"%{term}%"))
             );
         }
 
@@ -163,7 +179,8 @@ public class EmpleadosController : ControllerBase
                 x.FechaIngreso,
                 x.Activo,
                 Departamento = x.Departamento != null ? x.Departamento.Nombre : string.Empty,
-                Puesto = x.Puesto != null ? x.Puesto.Nombre : string.Empty
+                Puesto = x.Puesto != null ? x.Puesto.Nombre : string.Empty,
+                Sucursal = x.Sucursal != null ? x.Sucursal.Nombre : string.Empty
             })
             .ToListAsync();
 
@@ -173,7 +190,7 @@ public class EmpleadosController : ControllerBase
         var headers = new[]
         {
             "Id", "NumEmpleado", "Nombres", "ApellidoPaterno", "ApellidoMaterno",
-            "Email", "Telefono", "FechaIngreso", "Departamento", "Puesto", "Activo"
+            "Email", "Telefono", "FechaIngreso", "Departamento", "Puesto", "Sucursal", "Activo"
         };
 
         for (int i = 0; i < headers.Length; i++)
@@ -196,7 +213,8 @@ public class EmpleadosController : ControllerBase
             ws.Cell(r, 8).Value = x.FechaIngreso.ToDateTime(TimeOnly.MinValue);
             ws.Cell(r, 9).Value = x.Departamento;
             ws.Cell(r, 10).Value = x.Puesto;
-            ws.Cell(r, 11).Value = x.Activo;
+            ws.Cell(r, 11).Value = x.Sucursal;
+            ws.Cell(r, 12).Value = x.Activo;
             r++;
         }
 
@@ -325,7 +343,7 @@ public class EmpleadosController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] EmpleadoCreateDto dto)
     {
-        var relationResult = await ResolveRelationsAsync(dto.DepartamentoId, dto.PuestoId);
+        var relationResult = await ResolveRelationsAsync(dto.DepartamentoId, dto.PuestoId, dto.SucursalId);
         if (relationResult.Error is not null)
             return relationResult.Error;
 
@@ -344,7 +362,8 @@ public class EmpleadosController : ControllerBase
             FechaIngreso = dto.FechaIngreso,
             Activo = dto.Activo,
             DepartamentoId = relationResult.DepartamentoId,
-            PuestoId = dto.PuestoId
+            PuestoId = dto.PuestoId,
+            SucursalId = relationResult.SucursalId
         };
 
         _db.Empleados.Add(entity);
@@ -354,6 +373,7 @@ public class EmpleadosController : ControllerBase
             .AsNoTracking()
             .Include(x => x.Departamento)
             .Include(x => x.Puesto)
+            .Include(x => x.Sucursal)
             .Where(x => x.Id == entity.Id)
             .Select(x => ToDto(x))
             .FirstAsync();
@@ -368,7 +388,7 @@ public class EmpleadosController : ControllerBase
         if (entity is null)
             return NotFound();
 
-        var relationResult = await ResolveRelationsAsync(dto.DepartamentoId, dto.PuestoId);
+        var relationResult = await ResolveRelationsAsync(dto.DepartamentoId, dto.PuestoId, dto.SucursalId);
         if (relationResult.Error is not null)
             return relationResult.Error;
 
@@ -382,6 +402,7 @@ public class EmpleadosController : ControllerBase
         entity.Activo = dto.Activo;
         entity.DepartamentoId = relationResult.DepartamentoId;
         entity.PuestoId = dto.PuestoId;
+        entity.SucursalId = relationResult.SucursalId;
 
         await _db.SaveChangesAsync();
 
@@ -389,6 +410,7 @@ public class EmpleadosController : ControllerBase
             .AsNoTracking()
             .Include(x => x.Departamento)
             .Include(x => x.Puesto)
+            .Include(x => x.Sucursal)
             .Where(x => x.Id == entity.Id)
             .Select(x => ToDto(x))
             .FirstAsync();
@@ -428,7 +450,10 @@ public class EmpleadosController : ControllerBase
         return NoContent();
     }
 
-    private async Task<(int? DepartamentoId, IActionResult? Error)> ResolveRelationsAsync(int? departamentoId, int? puestoId)
+    private async Task<(int? DepartamentoId, int? SucursalId, IActionResult? Error)> ResolveRelationsAsync(
+        int? departamentoId,
+        int? puestoId,
+        int? sucursalId)
     {
         Departamento? departamento = null;
         Puesto? puesto = null;
@@ -440,7 +465,7 @@ public class EmpleadosController : ControllerBase
                 .FirstOrDefaultAsync(x => x.Id == departamentoId.Value && x.Activo);
 
             if (departamento is null)
-                return (null, BadRequest(new { message = "El departamento indicado no existe o está inactivo." }));
+                return (null, null, BadRequest(new { message = "El departamento indicado no existe o está inactivo." }));
         }
 
         if (puestoId.HasValue)
@@ -450,15 +475,28 @@ public class EmpleadosController : ControllerBase
                 .FirstOrDefaultAsync(x => x.Id == puestoId.Value && x.Activo);
 
             if (puesto is null)
-                return (null, BadRequest(new { message = "El puesto indicado no existe o está inactivo." }));
+                return (null, null, BadRequest(new { message = "El puesto indicado no existe o está inactivo." }));
 
             if (departamentoId.HasValue && puesto.DepartamentoId != departamentoId.Value)
-                return (null, BadRequest(new { message = "El puesto no pertenece al departamento indicado." }));
+                return (null, null, BadRequest(new { message = "El puesto no pertenece al departamento indicado." }));
 
             departamentoId = puesto.DepartamentoId;
         }
 
-        return (departamentoId, null);
+        if (sucursalId.HasValue)
+        {
+            var sucursal = await _db.Sucursales
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Id == sucursalId.Value);
+
+            if (sucursal is null)
+                return (null, null, BadRequest(new { message = "La sucursal indicada no existe." }));
+
+            if (!sucursal.Activo)
+                return (null, null, BadRequest(new { message = "La sucursal indicada está inactiva." }));
+        }
+
+        return (departamentoId, sucursalId, null);
     }
 
     private static EmpleadoDto ToDto(Empleado x)
@@ -478,7 +516,9 @@ public class EmpleadosController : ControllerBase
             DepartamentoId = x.DepartamentoId,
             DepartamentoNombre = x.Departamento != null ? x.Departamento.Nombre : null,
             PuestoId = x.PuestoId,
-            PuestoNombre = x.Puesto != null ? x.Puesto.Nombre : null
+            PuestoNombre = x.Puesto != null ? x.Puesto.Nombre : null,
+            SucursalId = x.SucursalId,
+            SucursalNombre = x.Sucursal != null ? x.Sucursal.Nombre : null
         };
     }
 

@@ -18,4 +18,7 @@ public class EmpleadoDto
 
     public int? PuestoId { get; set; }
     public string? PuestoNombre { get; set; }
+
+    public int? SucursalId { get; set; }
+    public string? SucursalNombre { get; set; }
 }

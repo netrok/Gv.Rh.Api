@@ -38,4 +38,7 @@ public class Empleado
 
     public int? PuestoId { get; set; }
     public Puesto? Puesto { get; set; }
+
+    public int? SucursalId { get; set; }
+    public Sucursal? Sucursal { get; set; }
 }

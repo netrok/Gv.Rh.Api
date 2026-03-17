@@ -28,4 +28,5 @@ public class EmpleadoUpdateDto
 
     public int? DepartamentoId { get; set; }
     public int? PuestoId { get; set; }
+    public int? SucursalId { get; set; }
 }
