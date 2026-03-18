@@ -1,40 +1,51 @@
+using System.Text;
+using System.Text.Json.Serialization;
 using Gv.Rh.Api.Middlewares;
 using Gv.Rh.Api.Services;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using System.Text;
+using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Controllers
-builder.Services.AddControllers();
+// Controllers + JSON
+builder.Services
+    .AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    });
 
 // Swagger + Bearer
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new() { Title = "Gv.Rh.Api", Version = "v1" });
+    c.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Gv.Rh.Api",
+        Version = "v1"
+    });
 
-    c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Name = "Authorization",
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+        Type = SecuritySchemeType.Http,
         Scheme = "bearer",
         BearerFormat = "JWT",
-        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        In = ParameterLocation.Header,
         Description = "Escribe: Bearer {tu_token}"
     });
 
-    c.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
-            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            new OpenApiSecurityScheme
             {
-                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                Reference = new OpenApiReference
                 {
-                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Type = ReferenceType.SecurityScheme,
                     Id = "Bearer"
                 }
             },
@@ -65,7 +76,8 @@ var key = jwt["Key"] ?? throw new InvalidOperationException(
 var issuer = jwt["Issuer"] ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
 var audience = jwt["Audience"] ?? throw new InvalidOperationException("Falta Jwt:Audience.");
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(opt =>
     {
         opt.TokenValidationParameters = new TokenValidationParameters
@@ -87,16 +99,16 @@ builder.Services.AddAuthorization();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<AuditSaveChangesInterceptor>();
 
-// ✅ Services de app (REGÍSTRALOS ANTES DEL BUILD)
-builder.Services.AddScoped<AuditLogger>();   // <-- movido arriba
-builder.Services.AddScoped<TokenService>();  // si TokenService usa AuditLogger, aquí ya está
+// Services de app
+builder.Services.AddScoped<AuditLogger>();
+builder.Services.AddScoped<TokenService>();
 
 // DbContext (PostgreSQL) + interceptor
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>
 {
     opt.UseNpgsql(builder.Configuration.GetConnectionString("RhDb"));
 
-    // ✅ SOLO si instalaste EFCore.NamingConventions 8.0.3
+    // Si instalaste EFCore.NamingConventions:
     // opt.UseSnakeCaseNamingConvention();
 
     opt.AddInterceptors(sp.GetRequiredService<AuditSaveChangesInterceptor>());
@@ -122,7 +134,7 @@ app.UseCors(CorsPolicyName);
 
 app.UseAuthentication();
 
-// ✅ Bloquea el sistema hasta cambiar password si MustChangePassword=true
+// Bloquea el sistema hasta cambiar password si MustChangePassword = true
 app.UseMiddleware<ForcePasswordChangeMiddleware>();
 
 app.UseAuthorization();

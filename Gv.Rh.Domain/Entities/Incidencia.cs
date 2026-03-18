@@ -20,6 +20,14 @@ public class Incidencia
 
     public EstatusIncidencia Estatus { get; set; } = EstatusIncidencia.PENDIENTE;
 
+    public bool TieneEvidencia { get; set; }
+
+    public string? EvidenciaNombreOriginal { get; set; }
+    public string? EvidenciaNombreArchivo { get; set; }
+    public string? EvidenciaContentType { get; set; }
+    public long? EvidenciaTamanoBytes { get; set; }
+    public string? EvidenciaRuta { get; set; }
+
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }

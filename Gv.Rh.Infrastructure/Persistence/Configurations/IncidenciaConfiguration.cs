@@ -37,6 +37,18 @@ public class IncidenciaConfiguration : IEntityTypeConfiguration<Incidencia>
         b.Property(x => x.UpdatedAtUtc)
             .IsRequired();
 
+        b.Property(x => x.EvidenciaNombreOriginal)
+            .HasMaxLength(260);
+
+        b.Property(x => x.EvidenciaNombreArchivo)
+            .HasMaxLength(260);
+
+        b.Property(x => x.EvidenciaContentType)
+            .HasMaxLength(120);
+
+        b.Property(x => x.EvidenciaRuta)
+            .HasMaxLength(500);
+
         b.HasIndex(x => x.EmpleadoId);
         b.HasIndex(x => x.SucursalId);
         b.HasIndex(x => x.Tipo);

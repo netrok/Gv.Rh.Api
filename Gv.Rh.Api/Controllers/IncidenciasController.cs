@@ -4,6 +4,7 @@ using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
 
 namespace Gv.Rh.Api.Controllers;
@@ -15,13 +16,30 @@ public class IncidenciasController : ControllerBase
 {
     private readonly RhDbContext _context;
 
+    private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".pdf", ".jpg", ".jpeg", ".png", ".webp"
+    };
+
+    private static readonly HashSet<string> AllowedContentTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "application/pdf",
+        "image/jpeg",
+        "image/png",
+        "image/webp"
+    };
+
+    private const long MaxFileSizeBytes = 5 * 1024 * 1024; // 5 MB
+
     public IncidenciasController(RhDbContext context)
     {
         _context = context;
     }
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<IncidenciaDto>>> GetAll([FromQuery] IncidenciaQueryDto query)
+    public async Task<ActionResult<IEnumerable<IncidenciaDto>>> GetAll(
+        [FromQuery] IncidenciaQueryDto query,
+        CancellationToken cancellationToken)
     {
         var incidenciasQuery = _context.Incidencias
             .AsNoTracking()
@@ -58,7 +76,9 @@ public class IncidenciasController : ControllerBase
                 Id = x.Id,
                 EmpleadoId = x.EmpleadoId,
                 EmpleadoNombre = x.Empleado.Nombres + " " + x.Empleado.ApellidoPaterno +
-                                 (string.IsNullOrWhiteSpace(x.Empleado.ApellidoMaterno) ? "" : " " + x.Empleado.ApellidoMaterno),
+                                 ((x.Empleado.ApellidoMaterno != null && x.Empleado.ApellidoMaterno != "")
+                                     ? " " + x.Empleado.ApellidoMaterno
+                                     : ""),
                 SucursalId = x.SucursalId,
                 SucursalNombre = x.Sucursal != null ? x.Sucursal.Nombre : null,
                 Tipo = x.Tipo,
@@ -66,16 +86,20 @@ public class IncidenciasController : ControllerBase
                 FechaFin = x.FechaFin,
                 Comentario = x.Comentario,
                 Estatus = x.Estatus,
+                TieneEvidencia = x.TieneEvidencia,
+                EvidenciaNombreOriginal = x.EvidenciaNombreOriginal,
+                EvidenciaContentType = x.EvidenciaContentType,
+                EvidenciaTamanoBytes = x.EvidenciaTamanoBytes,
                 CreatedAtUtc = x.CreatedAtUtc,
                 UpdatedAtUtc = x.UpdatedAtUtc
             })
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         return Ok(items);
     }
 
     [HttpGet("{id:int}")]
-    public async Task<ActionResult<IncidenciaDto>> GetById(int id)
+    public async Task<ActionResult<IncidenciaDto>> GetById(int id, CancellationToken cancellationToken)
     {
         var item = await _context.Incidencias
             .AsNoTracking()
@@ -87,7 +111,9 @@ public class IncidenciasController : ControllerBase
                 Id = x.Id,
                 EmpleadoId = x.EmpleadoId,
                 EmpleadoNombre = x.Empleado.Nombres + " " + x.Empleado.ApellidoPaterno +
-                                 (string.IsNullOrWhiteSpace(x.Empleado.ApellidoMaterno) ? "" : " " + x.Empleado.ApellidoMaterno),
+                                 ((x.Empleado.ApellidoMaterno != null && x.Empleado.ApellidoMaterno != "")
+                                     ? " " + x.Empleado.ApellidoMaterno
+                                     : ""),
                 SucursalId = x.SucursalId,
                 SucursalNombre = x.Sucursal != null ? x.Sucursal.Nombre : null,
                 Tipo = x.Tipo,
@@ -95,10 +121,14 @@ public class IncidenciasController : ControllerBase
                 FechaFin = x.FechaFin,
                 Comentario = x.Comentario,
                 Estatus = x.Estatus,
+                TieneEvidencia = x.TieneEvidencia,
+                EvidenciaNombreOriginal = x.EvidenciaNombreOriginal,
+                EvidenciaContentType = x.EvidenciaContentType,
+                EvidenciaTamanoBytes = x.EvidenciaTamanoBytes,
                 CreatedAtUtc = x.CreatedAtUtc,
                 UpdatedAtUtc = x.UpdatedAtUtc
             })
-            .FirstOrDefaultAsync();
+            .FirstOrDefaultAsync(cancellationToken);
 
         if (item is null)
             return NotFound(new { message = "Incidencia no encontrada." });
@@ -108,14 +138,16 @@ public class IncidenciasController : ControllerBase
 
     [HttpPost]
     [Authorize(Roles = "ADMIN,RRHH")]
-    public async Task<ActionResult<IncidenciaDto>> Create([FromBody] CreateIncidenciaDto dto)
+    public async Task<ActionResult<IncidenciaDto>> Create(
+        [FromBody] CreateIncidenciaDto dto,
+        CancellationToken cancellationToken)
     {
         if (dto.FechaFin < dto.FechaInicio)
             return BadRequest(new { message = "La fecha fin no puede ser menor que la fecha inicio." });
 
         var empleado = await _context.Empleados
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Id == dto.EmpleadoId);
+            .FirstOrDefaultAsync(x => x.Id == dto.EmpleadoId, cancellationToken);
 
         if (empleado is null)
             return BadRequest(new { message = "El empleado no existe." });
@@ -129,7 +161,7 @@ public class IncidenciasController : ControllerBase
         {
             var sucursalExiste = await _context.Sucursales
                 .AsNoTracking()
-                .AnyAsync(x => x.Id == sucursalId.Value);
+                .AnyAsync(x => x.Id == sucursalId.Value, cancellationToken);
 
             if (!sucursalExiste)
                 return BadRequest(new { message = "La sucursal indicada no existe." });
@@ -149,7 +181,7 @@ public class IncidenciasController : ControllerBase
         };
 
         _context.Incidencias.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(cancellationToken);
 
         var created = await _context.Incidencias
             .AsNoTracking()
@@ -161,7 +193,9 @@ public class IncidenciasController : ControllerBase
                 Id = x.Id,
                 EmpleadoId = x.EmpleadoId,
                 EmpleadoNombre = x.Empleado.Nombres + " " + x.Empleado.ApellidoPaterno +
-                                 (string.IsNullOrWhiteSpace(x.Empleado.ApellidoMaterno) ? "" : " " + x.Empleado.ApellidoMaterno),
+                                 ((x.Empleado.ApellidoMaterno != null && x.Empleado.ApellidoMaterno != "")
+                                     ? " " + x.Empleado.ApellidoMaterno
+                                     : ""),
                 SucursalId = x.SucursalId,
                 SucursalNombre = x.Sucursal != null ? x.Sucursal.Nombre : null,
                 Tipo = x.Tipo,
@@ -169,22 +203,29 @@ public class IncidenciasController : ControllerBase
                 FechaFin = x.FechaFin,
                 Comentario = x.Comentario,
                 Estatus = x.Estatus,
+                TieneEvidencia = x.TieneEvidencia,
+                EvidenciaNombreOriginal = x.EvidenciaNombreOriginal,
+                EvidenciaContentType = x.EvidenciaContentType,
+                EvidenciaTamanoBytes = x.EvidenciaTamanoBytes,
                 CreatedAtUtc = x.CreatedAtUtc,
                 UpdatedAtUtc = x.UpdatedAtUtc
             })
-            .FirstAsync();
+            .FirstAsync(cancellationToken);
 
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
     [HttpPut("{id:int}")]
     [Authorize(Roles = "ADMIN,RRHH")]
-    public async Task<ActionResult<IncidenciaDto>> Update(int id, [FromBody] UpdateIncidenciaDto dto)
+    public async Task<ActionResult<IncidenciaDto>> Update(
+        int id,
+        [FromBody] UpdateIncidenciaDto dto,
+        CancellationToken cancellationToken)
     {
         if (dto.FechaFin < dto.FechaInicio)
             return BadRequest(new { message = "La fecha fin no puede ser menor que la fecha inicio." });
 
-        var entity = await _context.Incidencias.FirstOrDefaultAsync(x => x.Id == id);
+        var entity = await _context.Incidencias.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
         if (entity is null)
             return NotFound(new { message = "Incidencia no encontrada." });
@@ -194,7 +235,7 @@ public class IncidenciasController : ControllerBase
 
         var empleado = await _context.Empleados
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Id == dto.EmpleadoId);
+            .FirstOrDefaultAsync(x => x.Id == dto.EmpleadoId, cancellationToken);
 
         if (empleado is null)
             return BadRequest(new { message = "El empleado no existe." });
@@ -208,7 +249,7 @@ public class IncidenciasController : ControllerBase
         {
             var sucursalExiste = await _context.Sucursales
                 .AsNoTracking()
-                .AnyAsync(x => x.Id == sucursalId.Value);
+                .AnyAsync(x => x.Id == sucursalId.Value, cancellationToken);
 
             if (!sucursalExiste)
                 return BadRequest(new { message = "La sucursal indicada no existe." });
@@ -222,7 +263,7 @@ public class IncidenciasController : ControllerBase
         entity.Comentario = dto.Comentario;
         entity.UpdatedAtUtc = DateTime.UtcNow;
 
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(cancellationToken);
 
         var updated = await _context.Incidencias
             .AsNoTracking()
@@ -234,7 +275,9 @@ public class IncidenciasController : ControllerBase
                 Id = x.Id,
                 EmpleadoId = x.EmpleadoId,
                 EmpleadoNombre = x.Empleado.Nombres + " " + x.Empleado.ApellidoPaterno +
-                                 (string.IsNullOrWhiteSpace(x.Empleado.ApellidoMaterno) ? "" : " " + x.Empleado.ApellidoMaterno),
+                                 ((x.Empleado.ApellidoMaterno != null && x.Empleado.ApellidoMaterno != "")
+                                     ? " " + x.Empleado.ApellidoMaterno
+                                     : ""),
                 SucursalId = x.SucursalId,
                 SucursalNombre = x.Sucursal != null ? x.Sucursal.Nombre : null,
                 Tipo = x.Tipo,
@@ -242,19 +285,23 @@ public class IncidenciasController : ControllerBase
                 FechaFin = x.FechaFin,
                 Comentario = x.Comentario,
                 Estatus = x.Estatus,
+                TieneEvidencia = x.TieneEvidencia,
+                EvidenciaNombreOriginal = x.EvidenciaNombreOriginal,
+                EvidenciaContentType = x.EvidenciaContentType,
+                EvidenciaTamanoBytes = x.EvidenciaTamanoBytes,
                 CreatedAtUtc = x.CreatedAtUtc,
                 UpdatedAtUtc = x.UpdatedAtUtc
             })
-            .FirstAsync();
+            .FirstAsync(cancellationToken);
 
         return Ok(updated);
     }
 
     [HttpPost("{id:int}/aprobar")]
     [Authorize(Roles = "ADMIN,RRHH")]
-    public async Task<IActionResult> Aprobar(int id)
+    public async Task<IActionResult> Aprobar(int id, CancellationToken cancellationToken)
     {
-        var entity = await _context.Incidencias.FirstOrDefaultAsync(x => x.Id == id);
+        var entity = await _context.Incidencias.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
         if (entity is null)
             return NotFound(new { message = "Incidencia no encontrada." });
@@ -265,16 +312,16 @@ public class IncidenciasController : ControllerBase
         entity.Estatus = EstatusIncidencia.APROBADA;
         entity.UpdatedAtUtc = DateTime.UtcNow;
 
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(cancellationToken);
 
         return Ok(new { message = "Incidencia aprobada correctamente." });
     }
 
     [HttpPost("{id:int}/rechazar")]
     [Authorize(Roles = "ADMIN,RRHH")]
-    public async Task<IActionResult> Rechazar(int id)
+    public async Task<IActionResult> Rechazar(int id, CancellationToken cancellationToken)
     {
-        var entity = await _context.Incidencias.FirstOrDefaultAsync(x => x.Id == id);
+        var entity = await _context.Incidencias.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
         if (entity is null)
             return NotFound(new { message = "Incidencia no encontrada." });
@@ -285,9 +332,137 @@ public class IncidenciasController : ControllerBase
         entity.Estatus = EstatusIncidencia.RECHAZADA;
         entity.UpdatedAtUtc = DateTime.UtcNow;
 
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(cancellationToken);
 
         return Ok(new { message = "Incidencia rechazada correctamente." });
+    }
+
+    [HttpPost("{id:int}/evidencia")]
+    [Authorize(Roles = "ADMIN,RRHH")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(MaxFileSizeBytes)]
+    [ProducesResponseType(typeof(IncidenciaEvidenciaDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IncidenciaEvidenciaDto>> UploadEvidencia(
+        int id,
+        [FromForm] IFormFile archivo,
+        CancellationToken cancellationToken)
+    {
+        if (archivo is null || archivo.Length == 0)
+            return BadRequest(new { message = "Debes seleccionar un archivo." });
+
+        if (archivo.Length > MaxFileSizeBytes)
+            return BadRequest(new { message = "El archivo excede el tamaño máximo permitido de 5 MB." });
+
+        var extension = Path.GetExtension(archivo.FileName);
+        if (string.IsNullOrWhiteSpace(extension) || !AllowedExtensions.Contains(extension))
+            return BadRequest(new { message = "Tipo de archivo no permitido." });
+
+        if (!AllowedContentTypes.Contains(archivo.ContentType))
+            return BadRequest(new { message = "Content-Type no permitido." });
+
+        var incidencia = await _context.Incidencias.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (incidencia is null)
+            return NotFound(new { message = "Incidencia no encontrada." });
+
+        var uploadsRoot = Path.Combine(AppContext.BaseDirectory, "storage", "incidencias");
+        var folder = Path.Combine(
+            uploadsRoot,
+            DateTime.UtcNow.ToString("yyyy"),
+            DateTime.UtcNow.ToString("MM"));
+
+        Directory.CreateDirectory(folder);
+
+        if (!string.IsNullOrWhiteSpace(incidencia.EvidenciaRuta))
+        {
+            var oldFullPath = Path.Combine(AppContext.BaseDirectory, incidencia.EvidenciaRuta);
+            if (System.IO.File.Exists(oldFullPath))
+                System.IO.File.Delete(oldFullPath);
+        }
+
+        var safeFileName = $"{Guid.NewGuid():N}{extension}";
+        var fullPath = Path.Combine(folder, safeFileName);
+
+        await using (var stream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            await archivo.CopyToAsync(stream, cancellationToken);
+        }
+
+        var relativePath = Path.GetRelativePath(AppContext.BaseDirectory, fullPath);
+
+        incidencia.TieneEvidencia = true;
+        incidencia.EvidenciaNombreOriginal = Path.GetFileName(archivo.FileName);
+        incidencia.EvidenciaNombreArchivo = safeFileName;
+        incidencia.EvidenciaContentType = archivo.ContentType;
+        incidencia.EvidenciaTamanoBytes = archivo.Length;
+        incidencia.EvidenciaRuta = relativePath.Replace("\\", "/");
+        incidencia.UpdatedAtUtc = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync(cancellationToken);
+
+        return Ok(new IncidenciaEvidenciaDto
+        {
+            TieneEvidencia = incidencia.TieneEvidencia,
+            EvidenciaNombreOriginal = incidencia.EvidenciaNombreOriginal,
+            EvidenciaContentType = incidencia.EvidenciaContentType,
+            EvidenciaTamanoBytes = incidencia.EvidenciaTamanoBytes
+        });
+    }
+
+    [HttpGet("{id:int}/evidencia")]
+    [Authorize(Roles = "ADMIN,RRHH")]
+    public async Task<IActionResult> DownloadEvidencia(int id, CancellationToken cancellationToken)
+    {
+        var incidencia = await _context.Incidencias
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+
+        if (incidencia is null)
+            return NotFound(new { message = "Incidencia no encontrada." });
+
+        if (!incidencia.TieneEvidencia || string.IsNullOrWhiteSpace(incidencia.EvidenciaRuta))
+            return NotFound(new { message = "La incidencia no tiene evidencia." });
+
+        var fullPath = Path.Combine(AppContext.BaseDirectory, incidencia.EvidenciaRuta);
+        if (!System.IO.File.Exists(fullPath))
+            return NotFound(new { message = "El archivo de evidencia no existe en disco." });
+
+        var provider = new FileExtensionContentTypeProvider();
+        if (!provider.TryGetContentType(fullPath, out var contentType))
+            contentType = incidencia.EvidenciaContentType ?? "application/octet-stream";
+
+        var fileName = incidencia.EvidenciaNombreOriginal ?? Path.GetFileName(fullPath);
+        var bytes = await System.IO.File.ReadAllBytesAsync(fullPath, cancellationToken);
+
+        return File(bytes, contentType, fileName);
+    }
+
+    [HttpDelete("{id:int}/evidencia")]
+    [Authorize(Roles = "ADMIN,RRHH")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> DeleteEvidencia(int id, CancellationToken cancellationToken)
+    {
+        var incidencia = await _context.Incidencias.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (incidencia is null)
+            return NotFound(new { message = "Incidencia no encontrada." });
+
+        if (!string.IsNullOrWhiteSpace(incidencia.EvidenciaRuta))
+        {
+            var fullPath = Path.Combine(AppContext.BaseDirectory, incidencia.EvidenciaRuta);
+            if (System.IO.File.Exists(fullPath))
+                System.IO.File.Delete(fullPath);
+        }
+
+        incidencia.TieneEvidencia = false;
+        incidencia.EvidenciaNombreOriginal = null;
+        incidencia.EvidenciaNombreArchivo = null;
+        incidencia.EvidenciaContentType = null;
+        incidencia.EvidenciaTamanoBytes = null;
+        incidencia.EvidenciaRuta = null;
+        incidencia.UpdatedAtUtc = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync(cancellationToken);
+
+        return NoContent();
     }
 
     [HttpGet("catalogos/tipos")]
