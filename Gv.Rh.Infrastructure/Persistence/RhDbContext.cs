@@ -16,10 +16,14 @@ public class RhDbContext : DbContext
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<Incidencia> Incidencias => Set<Incidencia>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        // Aplica configuraciones externas tipo IEntityTypeConfiguration<T>
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(RhDbContext).Assembly);
 
         // ===== Departamentos =====
         modelBuilder.Entity<Departamento>(d =>
@@ -76,7 +80,6 @@ public class RhDbContext : DbContext
                 .HasForeignKey(x => x.DepartamentoId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-        d:;
             p.HasIndex(x => x.Clave).IsUnique();
             p.HasIndex(x => x.DepartamentoId);
             p.HasIndex(x => new { x.DepartamentoId, x.Nombre });
