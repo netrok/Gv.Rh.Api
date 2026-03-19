@@ -2,13 +2,19 @@ using System.Text;
 using System.Text.Json.Serialization;
 using Gv.Rh.Api.Middlewares;
 using Gv.Rh.Api.Services;
+using Gv.Rh.Application.Abstractions.Reports;
 using Gv.Rh.Infrastructure.Persistence;
+using Gv.Rh.Infrastructure.Reports;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using QuestPDF.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// QuestPDF license
+QuestPDF.Settings.License = LicenseType.Community;
 
 // Controllers + JSON
 builder.Services
@@ -102,6 +108,7 @@ builder.Services.AddScoped<AuditSaveChangesInterceptor>();
 // Services de app
 builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddScoped<TokenService>();
+builder.Services.AddScoped<IIncidenciasReportService, IncidenciasReportService>();
 
 // DbContext (PostgreSQL) + interceptor
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>

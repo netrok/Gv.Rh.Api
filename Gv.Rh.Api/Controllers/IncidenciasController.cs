@@ -1,4 +1,5 @@
-﻿using Gv.Rh.Application.DTOs.Incidencias;
+﻿using Gv.Rh.Application.Abstractions.Reports;
+using Gv.Rh.Application.DTOs.Incidencias;
 using Gv.Rh.Domain.Common.Enums;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
@@ -15,6 +16,7 @@ namespace Gv.Rh.Api.Controllers;
 public class IncidenciasController : ControllerBase
 {
     private readonly RhDbContext _context;
+    private readonly IIncidenciasReportService _incidenciasReportService;
 
     private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -31,9 +33,12 @@ public class IncidenciasController : ControllerBase
 
     private const long MaxFileSizeBytes = 5 * 1024 * 1024; // 5 MB
 
-    public IncidenciasController(RhDbContext context)
+    public IncidenciasController(
+        RhDbContext context,
+        IIncidenciasReportService incidenciasReportService)
     {
         _context = context;
+        _incidenciasReportService = incidenciasReportService;
     }
 
     [HttpGet]
@@ -41,34 +46,7 @@ public class IncidenciasController : ControllerBase
         [FromQuery] IncidenciaQueryDto query,
         CancellationToken cancellationToken)
     {
-        var incidenciasQuery = _context.Incidencias
-            .AsNoTracking()
-            .Include(x => x.Empleado)
-            .Include(x => x.Sucursal)
-            .AsQueryable();
-
-        if (query.EmpleadoId.HasValue)
-            incidenciasQuery = incidenciasQuery.Where(x => x.EmpleadoId == query.EmpleadoId.Value);
-
-        if (query.SucursalId.HasValue)
-            incidenciasQuery = incidenciasQuery.Where(x => x.SucursalId == query.SucursalId.Value);
-
-        if (query.Tipo.HasValue)
-            incidenciasQuery = incidenciasQuery.Where(x => x.Tipo == query.Tipo.Value);
-
-        if (query.Estatus.HasValue)
-            incidenciasQuery = incidenciasQuery.Where(x => x.Estatus == query.Estatus.Value);
-
-        if (query.SoloPendientes == true)
-            incidenciasQuery = incidenciasQuery.Where(x => x.Estatus == EstatusIncidencia.PENDIENTE);
-
-        if (query.FechaDesde.HasValue)
-            incidenciasQuery = incidenciasQuery.Where(x => x.FechaInicio >= query.FechaDesde.Value);
-
-        if (query.FechaHasta.HasValue)
-            incidenciasQuery = incidenciasQuery.Where(x => x.FechaFin <= query.FechaHasta.Value);
-
-        var items = await incidenciasQuery
+        var items = await BuildIncidenciasBaseQuery(query)
             .OrderByDescending(x => x.FechaInicio)
             .ThenByDescending(x => x.Id)
             .Select(x => new IncidenciaDto
@@ -76,7 +54,7 @@ public class IncidenciasController : ControllerBase
                 Id = x.Id,
                 EmpleadoId = x.EmpleadoId,
                 EmpleadoNombre = x.Empleado.Nombres + " " + x.Empleado.ApellidoPaterno +
-                                 ((x.Empleado.ApellidoMaterno != null && x.Empleado.ApellidoMaterno != "")
+                                 (!string.IsNullOrWhiteSpace(x.Empleado.ApellidoMaterno)
                                      ? " " + x.Empleado.ApellidoMaterno
                                      : ""),
                 SucursalId = x.SucursalId,
@@ -98,6 +76,26 @@ public class IncidenciasController : ControllerBase
         return Ok(items);
     }
 
+    [HttpGet("export/xlsx")]
+    [Authorize(Roles = "ADMIN,RRHH")]
+    public async Task<IActionResult> ExportXlsx(
+        [FromQuery] IncidenciaQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var file = await _incidenciasReportService.BuildXlsxAsync(query, cancellationToken);
+        return File(file.Content, file.ContentType, file.FileName);
+    }
+
+    [HttpGet("export/pdf")]
+    [Authorize(Roles = "ADMIN,RRHH")]
+    public async Task<IActionResult> ExportPdf(
+        [FromQuery] IncidenciaQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var file = await _incidenciasReportService.BuildPdfAsync(query, cancellationToken);
+        return File(file.Content, file.ContentType, file.FileName);
+    }
+
     [HttpGet("{id:int}")]
     public async Task<ActionResult<IncidenciaDto>> GetById(int id, CancellationToken cancellationToken)
     {
@@ -111,7 +109,7 @@ public class IncidenciasController : ControllerBase
                 Id = x.Id,
                 EmpleadoId = x.EmpleadoId,
                 EmpleadoNombre = x.Empleado.Nombres + " " + x.Empleado.ApellidoPaterno +
-                                 ((x.Empleado.ApellidoMaterno != null && x.Empleado.ApellidoMaterno != "")
+                                 (!string.IsNullOrWhiteSpace(x.Empleado.ApellidoMaterno)
                                      ? " " + x.Empleado.ApellidoMaterno
                                      : ""),
                 SucursalId = x.SucursalId,
@@ -193,7 +191,7 @@ public class IncidenciasController : ControllerBase
                 Id = x.Id,
                 EmpleadoId = x.EmpleadoId,
                 EmpleadoNombre = x.Empleado.Nombres + " " + x.Empleado.ApellidoPaterno +
-                                 ((x.Empleado.ApellidoMaterno != null && x.Empleado.ApellidoMaterno != "")
+                                 (!string.IsNullOrWhiteSpace(x.Empleado.ApellidoMaterno)
                                      ? " " + x.Empleado.ApellidoMaterno
                                      : ""),
                 SucursalId = x.SucursalId,
@@ -275,7 +273,7 @@ public class IncidenciasController : ControllerBase
                 Id = x.Id,
                 EmpleadoId = x.EmpleadoId,
                 EmpleadoNombre = x.Empleado.Nombres + " " + x.Empleado.ApellidoPaterno +
-                                 ((x.Empleado.ApellidoMaterno != null && x.Empleado.ApellidoMaterno != "")
+                                 (!string.IsNullOrWhiteSpace(x.Empleado.ApellidoMaterno)
                                      ? " " + x.Empleado.ApellidoMaterno
                                      : ""),
                 SucursalId = x.SucursalId,
@@ -491,5 +489,37 @@ public class IncidenciasController : ControllerBase
             });
 
         return Ok(items);
+    }
+
+    private IQueryable<Incidencia> BuildIncidenciasBaseQuery(IncidenciaQueryDto query)
+    {
+        var incidenciasQuery = _context.Incidencias
+            .AsNoTracking()
+            .Include(x => x.Empleado)
+            .Include(x => x.Sucursal)
+            .AsQueryable();
+
+        if (query.EmpleadoId.HasValue)
+            incidenciasQuery = incidenciasQuery.Where(x => x.EmpleadoId == query.EmpleadoId.Value);
+
+        if (query.SucursalId.HasValue)
+            incidenciasQuery = incidenciasQuery.Where(x => x.SucursalId == query.SucursalId.Value);
+
+        if (query.Tipo.HasValue)
+            incidenciasQuery = incidenciasQuery.Where(x => x.Tipo == query.Tipo.Value);
+
+        if (query.Estatus.HasValue)
+            incidenciasQuery = incidenciasQuery.Where(x => x.Estatus == query.Estatus.Value);
+
+        if (query.SoloPendientes)
+            incidenciasQuery = incidenciasQuery.Where(x => x.Estatus == EstatusIncidencia.PENDIENTE);
+
+        if (query.FechaDesde.HasValue)
+            incidenciasQuery = incidenciasQuery.Where(x => x.FechaInicio >= query.FechaDesde.Value);
+
+        if (query.FechaHasta.HasValue)
+            incidenciasQuery = incidenciasQuery.Where(x => x.FechaFin <= query.FechaHasta.Value);
+
+        return incidenciasQuery;
     }
 }
