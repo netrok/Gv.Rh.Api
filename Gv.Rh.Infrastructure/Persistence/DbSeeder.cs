@@ -1,4 +1,5 @@
-﻿using Gv.Rh.Domain.Entities;
+﻿using Gv.Rh.Domain.Common;
+using Gv.Rh.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace Gv.Rh.Infrastructure.Persistence;
@@ -7,40 +8,48 @@ public static class DbSeeder
 {
     public static async Task SeedAsync(RhDbContext db)
     {
-        await db.Database.MigrateAsync();
-
-        await EnsureUserAsync(db,
-            email: "admin@rh.local",
-            password: "Admin123*",
-            role: "ADMIN",
-            mustChangePassword: false);
-
-        await EnsureUserAsync(db,
-            email: "rrhh@rh.local",
-            password: "Rrhh123*",
-            role: "RRHH",
-            mustChangePassword: false);
-    }
-
-    private static async Task EnsureUserAsync(
-        RhDbContext db,
-        string email,
-        string password,
-        string role,
-        bool mustChangePassword)
-    {
-        var exists = await db.Users.AnyAsync(x => x.Email == email);
-        if (exists) return;
-
-        db.Users.Add(new AppUser
+        async Task UpsertUserAsync(
+            string email,
+            string fullName,
+            string password,
+            string role,
+            bool isActive,
+            bool mustChangePassword = true)
         {
-            Email = email,
-            Role = role,
-            IsActive = true,
-            MustChangePassword = mustChangePassword,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password)
-        });
+            email = email.Trim().ToLowerInvariant();
+            fullName = fullName.Trim();
+            role = UserRoles.Normalize(role);
 
-        await db.SaveChangesAsync();
+            var existing = await db.Users.FirstOrDefaultAsync(x => x.Email == email);
+            if (existing is not null)
+                return;
+
+            db.Users.Add(new AppUser
+            {
+                Email = email,
+                FullName = fullName,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
+                Role = role,
+                IsActive = isActive,
+                MustChangePassword = mustChangePassword,
+                CreatedAtUtc = DateTime.UtcNow
+            });
+
+            await db.SaveChangesAsync();
+        }
+
+        await UpsertUserAsync(
+            email: "admin@rh.local",
+            fullName: "Administrador",
+            password: "Admin123*",
+            role: UserRoles.Admin,
+            isActive: true);
+
+        await UpsertUserAsync(
+            email: "rrhh@rh.local",
+            fullName: "Recursos Humanos",
+            password: "Rrhh123*",
+            role: UserRoles.Rrhh,
+            isActive: true);
     }
 }

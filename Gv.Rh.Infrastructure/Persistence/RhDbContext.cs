@@ -1,4 +1,5 @@
-﻿using Gv.Rh.Domain.Entities;
+﻿using Gv.Rh.Domain.Common;
+using Gv.Rh.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace Gv.Rh.Infrastructure.Persistence;
@@ -174,9 +175,14 @@ public class RhDbContext : DbContext
                 .HasMaxLength(300)
                 .IsRequired();
 
+            u.Property(x => x.FullName)
+                .HasMaxLength(160)
+                .IsRequired();
+
             u.Property(x => x.Role)
                 .HasMaxLength(50)
-                .IsRequired();
+                .IsRequired()
+                .HasDefaultValue(UserRoles.Consulta);
 
             u.Property(x => x.IsActive)
                 .IsRequired();
@@ -186,6 +192,8 @@ public class RhDbContext : DbContext
 
             u.Property(x => x.CreatedAtUtc)
                 .IsRequired();
+
+            u.Property(x => x.UpdatedAtUtc);
 
             u.HasIndex(x => x.Email).IsUnique();
 

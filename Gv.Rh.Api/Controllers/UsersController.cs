@@ -1,4 +1,5 @@
 ﻿using Gv.Rh.Api.Models;
+using Gv.Rh.Domain.Common;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
@@ -10,12 +11,29 @@ namespace Gv.Rh.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize(Roles = "ADMIN")]
+[Authorize(Roles = UserRoles.Admin)]
 public class UsersController : ControllerBase
 {
     private readonly RhDbContext _db;
 
-    public UsersController(RhDbContext db) => _db = db;
+    public UsersController(RhDbContext db)
+    {
+        _db = db;
+    }
+
+    [HttpGet("roles")]
+    public IActionResult GetRoles()
+    {
+        var roles = UserRoles.All
+            .Select(x => new
+            {
+                value = x,
+                label = x
+            })
+            .ToList();
+
+        return Ok(roles);
+    }
 
     [HttpGet]
     public async Task<IActionResult> GetAll(
@@ -23,23 +41,46 @@ public class UsersController : ControllerBase
         [FromQuery] int pageSize = 50,
         [FromQuery] string? q = null,
         [FromQuery] string? role = null,
-        [FromQuery] bool? active = null)
+        [FromQuery] bool? active = null,
+        CancellationToken ct = default)
     {
         page = Math.Max(page, 1);
         pageSize = Math.Clamp(pageSize, 1, 200);
 
-        var query = _db.Users.AsNoTracking().AsQueryable();
+        var query = _db.Users
+            .AsNoTracking()
+            .AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(q))
-            query = query.Where(x => EF.Functions.ILike(x.Email, $"%{q.Trim()}%"));
+        {
+            var term = q.Trim();
+            query = query.Where(x =>
+                EF.Functions.ILike(x.Email, $"%{term}%") ||
+                EF.Functions.ILike(x.FullName, $"%{term}%"));
+        }
 
         if (!string.IsNullOrWhiteSpace(role))
-            query = query.Where(x => x.Role == role.Trim());
+        {
+            var normalizedRole = UserRoles.Normalize(role);
+
+            if (!UserRoles.IsValid(normalizedRole))
+            {
+                return BadRequest(new
+                {
+                    message = $"Rol inválido. Permitidos: {string.Join(", ", UserRoles.All)}"
+                });
+            }
+
+            query = query.Where(x => x.Role == normalizedRole);
+        }
 
         if (active.HasValue)
+        {
             query = query.Where(x => x.IsActive == active.Value);
+        }
 
-        var total = await query.CountAsync();
+        var total = await query.CountAsync(ct);
+
         var items = await query
             .OrderBy(x => x.Id)
             .Skip((page - 1) * pageSize)
@@ -48,13 +89,15 @@ public class UsersController : ControllerBase
             {
                 x.Id,
                 x.Email,
+                x.FullName,
                 x.Role,
                 x.IsActive,
                 x.MustChangePassword,
                 x.EmpleadoId,
-                x.CreatedAtUtc
+                x.CreatedAtUtc,
+                x.UpdatedAtUtc
             })
-            .ToListAsync();
+            .ToListAsync(ct);
 
         return Ok(new
         {
@@ -67,104 +110,194 @@ public class UsersController : ControllerBase
     }
 
     [HttpGet("{id:int}")]
-    public async Task<IActionResult> GetById(int id)
+    public async Task<IActionResult> GetById(int id, CancellationToken ct = default)
     {
-        var user = await _db.Users.AsNoTracking()
+        var user = await _db.Users
+            .AsNoTracking()
             .Where(x => x.Id == id)
             .Select(x => new
             {
                 x.Id,
                 x.Email,
+                x.FullName,
                 x.Role,
                 x.IsActive,
                 x.MustChangePassword,
                 x.EmpleadoId,
-                x.CreatedAtUtc
+                x.CreatedAtUtc,
+                x.UpdatedAtUtc
             })
-            .FirstOrDefaultAsync();
+            .FirstOrDefaultAsync(ct);
 
         return user is null ? NotFound() : Ok(user);
     }
 
     [HttpPost]
-    public async Task<IActionResult> Create([FromBody] UserCreateDto dto)
+    public async Task<IActionResult> Create([FromBody] UserCreateDto dto, CancellationToken ct = default)
     {
-        var email = dto.Email.Trim().ToLowerInvariant();
+        var email = (dto.Email ?? string.Empty).Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            return BadRequest(new { message = "Email es obligatorio." });
+        }
 
-        var exists = await _db.Users.AnyAsync(x => x.Email.ToLower() == email);
-        if (exists) return Conflict(new { message = "Email ya existe." });
+        if (string.IsNullOrWhiteSpace(dto.Password))
+        {
+            return BadRequest(new { message = "Password es obligatorio." });
+        }
+
+        var normalizedRole = UserRoles.Normalize(dto.Role);
+        if (!UserRoles.IsValid(normalizedRole))
+        {
+            return BadRequest(new
+            {
+                message = $"Rol inválido. Permitidos: {string.Join(", ", UserRoles.All)}"
+            });
+        }
+
+        var exists = await _db.Users.AnyAsync(x => x.Email == email, ct);
+        if (exists)
+        {
+            return Conflict(new { message = "Email ya existe." });
+        }
+
+        Empleado? empleado = null;
 
         if (dto.EmpleadoId.HasValue)
         {
-            var empleadoExists = await _db.Empleados.AnyAsync(e => e.Id == dto.EmpleadoId.Value);
-            if (!empleadoExists) return BadRequest(new { message = "EmpleadoId no existe." });
+            empleado = await _db.Empleados.FirstOrDefaultAsync(
+                e => e.Id == dto.EmpleadoId.Value, ct);
 
-            var empleadoAlreadyLinked = await _db.Users.AnyAsync(u => u.EmpleadoId == dto.EmpleadoId.Value);
-            if (empleadoAlreadyLinked) return Conflict(new { message = "Ese empleado ya tiene cuenta." });
+            if (empleado is null)
+            {
+                return BadRequest(new { message = "EmpleadoId no existe." });
+            }
+
+            var empleadoAlreadyLinked = await _db.Users.AnyAsync(
+                u => u.EmpleadoId == dto.EmpleadoId.Value, ct);
+
+            if (empleadoAlreadyLinked)
+            {
+                return Conflict(new { message = "Ese empleado ya tiene cuenta." });
+            }
         }
 
         var user = new AppUser
         {
             Email = email,
-            Role = dto.Role.Trim(),
+            FullName = ResolveFullName(email, empleado),
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password.Trim()),
+            Role = normalizedRole,
             IsActive = dto.IsActive,
             EmpleadoId = dto.EmpleadoId,
             MustChangePassword = true,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password)
+            CreatedAtUtc = DateTime.UtcNow
         };
 
         _db.Users.Add(user);
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(ct);
 
         return CreatedAtAction(nameof(GetById), new { id = user.Id }, new
         {
             user.Id,
             user.Email,
+            user.FullName,
             user.Role,
             user.IsActive,
             user.MustChangePassword,
             user.EmpleadoId,
-            user.CreatedAtUtc
+            user.CreatedAtUtc,
+            user.UpdatedAtUtc
         });
     }
 
     [HttpPut("{id:int}")]
-    public async Task<IActionResult> Update(int id, [FromBody] UserUpdateDto dto)
+    public async Task<IActionResult> Update(int id, [FromBody] UserUpdateDto dto, CancellationToken ct = default)
     {
-        var user = await _db.Users.FirstOrDefaultAsync(x => x.Id == id);
-        if (user is null) return NotFound();
+        var user = await _db.Users.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (user is null)
+        {
+            return NotFound();
+        }
+
+        var normalizedRole = UserRoles.Normalize(dto.Role);
+        if (!UserRoles.IsValid(normalizedRole))
+        {
+            return BadRequest(new
+            {
+                message = $"Rol inválido. Permitidos: {string.Join(", ", UserRoles.All)}"
+            });
+        }
+
+        if (await WouldLeaveSystemWithoutAdminAsync(user, normalizedRole, dto.IsActive, ct))
+        {
+            return BadRequest(new
+            {
+                message = "No puedes dejar al sistema sin un ADMIN activo."
+            });
+        }
+
+        Empleado? empleado = null;
 
         if (dto.EmpleadoId.HasValue)
         {
-            var empleadoExists = await _db.Empleados.AnyAsync(e => e.Id == dto.EmpleadoId.Value);
-            if (!empleadoExists) return BadRequest(new { message = "EmpleadoId no existe." });
+            empleado = await _db.Empleados.FirstOrDefaultAsync(
+                e => e.Id == dto.EmpleadoId.Value, ct);
 
-            var empleadoAlreadyLinked = await _db.Users.AnyAsync(u => u.Id != id && u.EmpleadoId == dto.EmpleadoId.Value);
-            if (empleadoAlreadyLinked) return Conflict(new { message = "Ese empleado ya tiene cuenta." });
+            if (empleado is null)
+            {
+                return BadRequest(new { message = "EmpleadoId no existe." });
+            }
+
+            var empleadoAlreadyLinked = await _db.Users.AnyAsync(
+                u => u.Id != id && u.EmpleadoId == dto.EmpleadoId.Value, ct);
+
+            if (empleadoAlreadyLinked)
+            {
+                return Conflict(new { message = "Ese empleado ya tiene cuenta." });
+            }
         }
 
-        user.Role = dto.Role.Trim();
+        user.Role = normalizedRole;
         user.IsActive = dto.IsActive;
         user.EmpleadoId = dto.EmpleadoId;
+        user.UpdatedAtUtc = DateTime.UtcNow;
 
-        await _db.SaveChangesAsync();
+        var safeEmail = (user.Email ?? string.Empty).Trim().ToLowerInvariant();
+
+        if (dto.EmpleadoId.HasValue && empleado is not null)
+        {
+            user.FullName = ResolveFullName(safeEmail, empleado);
+        }
+        else if (string.IsNullOrWhiteSpace(user.FullName))
+        {
+            user.FullName = ResolveFullName(safeEmail, null);
+        }
+
+        await _db.SaveChangesAsync(ct);
 
         return Ok(new
         {
             user.Id,
             user.Email,
+            user.FullName,
             user.Role,
             user.IsActive,
             user.MustChangePassword,
-            user.EmpleadoId
+            user.EmpleadoId,
+            user.CreatedAtUtc,
+            user.UpdatedAtUtc
         });
     }
 
     [HttpPost("{id:int}/reset-password")]
-    public async Task<IActionResult> ResetPassword(int id, [FromBody] ResetPasswordDto dto)
+    public async Task<IActionResult> ResetPassword(int id, [FromBody] ResetPasswordDto dto, CancellationToken ct = default)
     {
-        var user = await _db.Users.FirstOrDefaultAsync(x => x.Id == id);
-        if (user is null) return NotFound();
+        var user = await _db.Users.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (user is null)
+        {
+            return NotFound();
+        }
 
         var newPass = string.IsNullOrWhiteSpace(dto.NewPassword)
             ? GenerateTempPassword()
@@ -172,44 +305,139 @@ public class UsersController : ControllerBase
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPass);
         user.MustChangePassword = true;
+        user.UpdatedAtUtc = DateTime.UtcNow;
 
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(ct);
 
-        return Ok(new { message = "Password actualizado.", tempPassword = newPass });
+        return Ok(new
+        {
+            message = "Password actualizado.",
+            tempPassword = newPass
+        });
     }
 
-    // ✅ Vincular empleado existente al usuario por email (solo ADMIN)
-    // POST /api/users/{id}/link-empleado-by-email
     [HttpPost("{id:int}/link-empleado-by-email")]
-    public async Task<IActionResult> LinkEmpleadoByEmail(int id)
+    public async Task<IActionResult> LinkEmpleadoByEmail(int id, CancellationToken ct = default)
     {
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == id);
-        if (user is null) return NotFound(new { message = "Usuario no existe." });
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == id, ct);
+        if (user is null)
+        {
+            return NotFound(new { message = "Usuario no existe." });
+        }
 
         var email = user.Email?.Trim().ToLowerInvariant();
         if (string.IsNullOrWhiteSpace(email))
+        {
             return BadRequest(new { message = "El usuario no tiene Email válido." });
+        }
 
         if (user.EmpleadoId.HasValue)
+        {
             return Conflict(new { message = "Este usuario ya está ligado a un empleado." });
+        }
 
-        var empleado = await _db.Empleados.FirstOrDefaultAsync(e => e.Email != null && e.Email.ToLower() == email);
+        var empleado = await _db.Empleados.FirstOrDefaultAsync(
+            e => e.Email != null && e.Email.ToLower() == email, ct);
+
         if (empleado is null)
+        {
             return NotFound(new { message = "No existe empleado con el email del usuario." });
+        }
 
-        var empleadoAlreadyLinked = await _db.Users.AnyAsync(u => u.EmpleadoId == empleado.Id);
+        var empleadoAlreadyLinked = await _db.Users.AnyAsync(u => u.EmpleadoId == empleado.Id, ct);
         if (empleadoAlreadyLinked)
+        {
             return Conflict(new { message = "Ese empleado ya tiene una cuenta ligada." });
+        }
 
         user.EmpleadoId = empleado.Id;
-        await _db.SaveChangesAsync();
+        user.FullName = ResolveFullName(email, empleado);
+        user.UpdatedAtUtc = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
 
         return Ok(new
         {
             message = "Empleado ligado al usuario por email.",
-            user = new { user.Id, user.Email, user.Role, user.IsActive, user.MustChangePassword, user.EmpleadoId },
-            empleado = new { empleado.Id, empleado.NumEmpleado, empleado.Nombres, empleado.ApellidoPaterno, empleado.ApellidoMaterno, empleado.Email }
+            user = new
+            {
+                user.Id,
+                user.Email,
+                user.FullName,
+                user.Role,
+                user.IsActive,
+                user.MustChangePassword,
+                user.EmpleadoId,
+                user.CreatedAtUtc,
+                user.UpdatedAtUtc
+            },
+            empleado = new
+            {
+                empleado.Id,
+                empleado.NumEmpleado,
+                empleado.Nombres,
+                empleado.ApellidoPaterno,
+                empleado.ApellidoMaterno,
+                empleado.Email
+            }
         });
+    }
+
+    private async Task<bool> WouldLeaveSystemWithoutAdminAsync(
+        AppUser currentUser,
+        string newRole,
+        bool newIsActive,
+        CancellationToken ct)
+    {
+        var currentRole = UserRoles.Normalize(currentUser.Role);
+
+        if (currentRole != UserRoles.Admin)
+        {
+            return false;
+        }
+
+        var willStopBeingAdmin = newRole != UserRoles.Admin || !newIsActive;
+        if (!willStopBeingAdmin)
+        {
+            return false;
+        }
+
+        var otherActiveAdmins = await _db.Users.CountAsync(
+            x => x.Id != currentUser.Id
+              && x.IsActive
+              && x.Role == UserRoles.Admin,
+            ct);
+
+        return otherActiveAdmins == 0;
+    }
+
+    private static string ResolveFullName(string? email, Empleado? empleado)
+    {
+        if (empleado is not null)
+        {
+            var parts = new[]
+            {
+                empleado.Nombres?.Trim(),
+                empleado.ApellidoPaterno?.Trim(),
+                empleado.ApellidoMaterno?.Trim()
+            }
+            .Where(x => !string.IsNullOrWhiteSpace(x));
+
+            var fullNameFromEmpleado = string.Join(" ", parts);
+            if (!string.IsNullOrWhiteSpace(fullNameFromEmpleado))
+            {
+                return fullNameFromEmpleado;
+            }
+        }
+
+        var safeEmail = (email ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(safeEmail))
+        {
+            return string.Empty;
+        }
+
+        var localPart = safeEmail.Split('@')[0].Trim();
+        return string.IsNullOrWhiteSpace(localPart) ? safeEmail : localPart;
     }
 
     private static string GenerateTempPassword()

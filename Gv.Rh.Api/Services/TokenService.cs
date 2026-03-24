@@ -1,4 +1,5 @@
-﻿using Gv.Rh.Domain.Entities;
+﻿using Gv.Rh.Domain.Common;
+using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -30,18 +31,34 @@ public class TokenService
             "Falta Jwt:Key. Configúralo con User Secrets (DEV) o variables de entorno (PROD)."
         );
 
+        var keyBytes = Encoding.UTF8.GetBytes(key);
+        if (keyBytes.Length < 16)
+        {
+            throw new InvalidOperationException(
+                "Jwt:Key debe tener al menos 16 bytes (128 bits). Recomendado: 32 bytes o más."
+            );
+        }
+
         var issuer = jwt["Issuer"] ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
         var audience = jwt["Audience"] ?? throw new InvalidOperationException("Falta Jwt:Audience.");
 
-        // HS256 pide mínimo 128 bits => usa un key >= 16 bytes (mejor 32+)
-        var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key));
+        var signingKey = new SymmetricSecurityKey(keyBytes);
         var creds = new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256);
+
+        var normalizedRole = UserRoles.Normalize(user.Role);
+        var displayName = string.IsNullOrWhiteSpace(user.FullName)
+            ? user.Email
+            : user.FullName.Trim();
 
         var claims = new List<Claim>
         {
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new(JwtRegisteredClaimNames.Email, user.Email),
-            new(ClaimTypes.Role, user.Role),
+            new(ClaimTypes.Email, user.Email),
+            new(ClaimTypes.Name, displayName),
+            new(ClaimTypes.Role, normalizedRole),
+            new("role", normalizedRole)
         };
 
         var accessMinutes = int.TryParse(jwt["AccessMinutes"], out var m) ? m : 15;
@@ -90,7 +107,6 @@ public class TokenService
         var now = DateTime.UtcNow;
         var tokenHash = Hash(refreshTokenPlain);
 
-        // Solo token vigente: no revocado y no reemplazado
         var rt = await _db.RefreshTokens
             .Include(x => x.User)
             .FirstOrDefaultAsync(x =>
@@ -121,7 +137,6 @@ public class TokenService
             throw new UnauthorizedAccessException("USER_INACTIVE");
         }
 
-        // Gate: si debe cambiar password, no dejamos refresh
         if (user.MustChangePassword)
         {
             rt.RevokedAtUtc = now;
@@ -135,12 +150,10 @@ public class TokenService
 
         var (newRaw, newHash, newExp) = CreateRefreshTokenMaterial();
 
-        // El viejo queda revocado y apuntando al nuevo
         rt.RevokedAtUtc = now;
         rt.RevokedReason = "ROTATED";
         rt.ReplacedByTokenHash = newHash;
 
-        // Insertamos el nuevo limpio
         _db.RefreshTokens.Add(new RefreshToken
         {
             UserId = user.Id,
@@ -155,7 +168,6 @@ public class TokenService
         await _db.SaveChangesAsync();
         await tx.CommitAsync();
 
-        // ✅ Auditar refresh (sin secretos)
         await _audit.LogAuthAsync("REFRESH", user, new { rotated = true });
 
         var access = CreateAccessToken(user);
@@ -164,14 +176,15 @@ public class TokenService
 
     public async Task RevokeRefreshTokenAsync(string refreshTokenPlain)
     {
-        if (string.IsNullOrWhiteSpace(refreshTokenPlain)) return;
+        if (string.IsNullOrWhiteSpace(refreshTokenPlain))
+            return;
 
         var now = DateTime.UtcNow;
         var tokenHash = Hash(refreshTokenPlain);
 
         var rt = await _db.RefreshTokens.FirstOrDefaultAsync(x => x.TokenHash == tokenHash);
-        if (rt is null) return;
-        if (rt.RevokedAtUtc != null) return;
+        if (rt is null || rt.RevokedAtUtc != null)
+            return;
 
         rt.RevokedAtUtc = now;
         rt.RevokedReason = "LOGOUT";
@@ -186,7 +199,8 @@ public class TokenService
             .Where(x => x.UserId == userId && x.RevokedAtUtc == null)
             .ToListAsync();
 
-        if (tokens.Count == 0) return;
+        if (tokens.Count == 0)
+            return;
 
         foreach (var t in tokens)
         {
@@ -201,10 +215,50 @@ public class TokenService
     {
         var now = DateTime.UtcNow;
 
-        // Conservador: borra solo expirados (revocados o no)
         return await _db.RefreshTokens
             .Where(x => x.ExpiresAtUtc <= now)
             .ExecuteDeleteAsync();
+    }
+
+    public ClaimsPrincipal ReadPrincipalFromExpiredToken(string token)
+    {
+        var jwt = _config.GetSection("Jwt");
+
+        var key = jwt["Key"] ?? throw new InvalidOperationException("Falta Jwt:Key.");
+        var issuer = jwt["Issuer"] ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
+        var audience = jwt["Audience"] ?? throw new InvalidOperationException("Falta Jwt:Audience.");
+
+        var keyBytes = Encoding.UTF8.GetBytes(key);
+        if (keyBytes.Length < 16)
+        {
+            throw new InvalidOperationException(
+                "Jwt:Key debe tener al menos 16 bytes (128 bits)."
+            );
+        }
+
+        var tokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateIssuerSigningKey = true,
+            ValidateLifetime = false,
+            ValidIssuer = issuer,
+            ValidAudience = audience,
+            IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
+            NameClaimType = ClaimTypes.Name,
+            RoleClaimType = ClaimTypes.Role
+        };
+
+        var tokenHandler = new JwtSecurityTokenHandler();
+        var principal = tokenHandler.ValidateToken(token, tokenValidationParameters, out var securityToken);
+
+        if (securityToken is not JwtSecurityToken jwtToken ||
+            !jwtToken.Header.Alg.Equals(SecurityAlgorithms.HmacSha256, StringComparison.InvariantCultureIgnoreCase))
+        {
+            throw new SecurityTokenException("Token inválido.");
+        }
+
+        return principal;
     }
 
     private (string plain, string hash, DateTime expUtc) CreateRefreshTokenMaterial()
@@ -219,7 +273,6 @@ public class TokenService
         return (raw, hash, exp);
     }
 
-    // SHA256 base64 (~44 chars)
     private static string Hash(string input)
     {
         using var sha = SHA256.Create();
