@@ -11,6 +11,7 @@ public class RhDbContext : DbContext
     }
 
     public DbSet<Empleado> Empleados => Set<Empleado>();
+    public DbSet<EmpleadoDocumento> EmpleadoDocumentos => Set<EmpleadoDocumento>();
     public DbSet<Departamento> Departamentos => Set<Departamento>();
     public DbSet<Puesto> Puestos => Set<Puesto>();
     public DbSet<Sucursal> Sucursales => Set<Sucursal>();
