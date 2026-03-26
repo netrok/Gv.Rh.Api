@@ -1,4 +1,5 @@
-﻿using Gv.Rh.Api.Services;
+﻿using Gv.Rh.Api.Contracts.EmpleadoDocumentos;
+using Gv.Rh.Api.Services;
 using Gv.Rh.Application.DTOs.EmpleadosDocumentos;
 using Gv.Rh.Domain.Common;
 using Gv.Rh.Domain.Entities;
@@ -6,8 +7,6 @@ using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Gv.Rh.Api.Contracts.EmpleadoDocumentos;
-
 
 namespace Gv.Rh.Api.Controllers;
 
@@ -18,6 +17,20 @@ public class EmpleadoDocumentosController : ControllerBase
 {
     private readonly RhDbContext _db;
     private readonly IEmpleadoDocumentoStorageService _storage;
+
+    private static readonly ChecklistDefinition[] ChecklistDefinitions =
+    [
+        new(TipoDocumentoEmpleado.Ine, true),
+        new(TipoDocumentoEmpleado.Curp, true),
+        new(TipoDocumentoEmpleado.Rfc, true),
+        new(TipoDocumentoEmpleado.Nss, true),
+        new(TipoDocumentoEmpleado.ActaNacimiento, true),
+        new(TipoDocumentoEmpleado.ComprobanteDomicilio, true),
+        new(TipoDocumentoEmpleado.Contrato, true),
+        new(TipoDocumentoEmpleado.ConstanciaFiscal, true),
+        new(TipoDocumentoEmpleado.CertificadoMedico, false),
+        new(TipoDocumentoEmpleado.Otro, false),
+    ];
 
     public EmpleadoDocumentosController(
         RhDbContext db,
@@ -48,6 +61,84 @@ public class EmpleadoDocumentosController : ControllerBase
             .ToListAsync(cancellationToken);
 
         return Ok(items);
+    }
+
+    [HttpGet("Empleados/{empleadoId:int}/documentos/checklist")]
+    public async Task<ActionResult<EmpleadoDocumentoChecklistDto>> GetChecklist(
+        int empleadoId,
+        CancellationToken cancellationToken)
+    {
+        var empleadoExiste = await _db.Empleados
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == empleadoId, cancellationToken);
+
+        if (!empleadoExiste)
+            return NotFound(new { message = "El empleado no existe." });
+
+        var documentos = await _db.EmpleadoDocumentos
+            .AsNoTracking()
+            .Where(x => x.EmpleadoId == empleadoId && x.Activo)
+            .OrderByDescending(x => x.UpdatedAtUtc)
+            .ThenByDescending(x => x.CreatedAtUtc)
+            .ToListAsync(cancellationToken);
+
+        var latestByTipo = documentos
+            .GroupBy(x => x.Tipo)
+            .ToDictionary(
+                g => g.Key,
+                g => g.First());
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var warningDate = today.AddDays(30);
+
+        var items = ChecklistDefinitions
+            .Select(def =>
+            {
+                latestByTipo.TryGetValue(def.Tipo, out var documento);
+                var estatus = ResolveChecklistStatus(documento, def.Requerido, today, warningDate);
+
+                return new EmpleadoDocumentoChecklistItemDto
+                {
+                    Tipo = (int)def.Tipo,
+                    TipoNombre = def.Tipo.ToString(),
+                    Requerido = def.Requerido,
+                    TieneDocumento = documento is not null,
+                    Estatus = estatus,
+                    DocumentoId = documento?.Id,
+                    NombreArchivoOriginal = documento?.NombreArchivoOriginal,
+                    FechaDocumento = documento?.FechaDocumento,
+                    FechaVencimiento = documento?.FechaVencimiento
+                };
+            })
+            .OrderByDescending(x => x.Requerido)
+            .ThenBy(x => x.Tipo)
+            .ToList();
+
+        var requiredItems = items.Where(x => x.Requerido).ToList();
+
+        var totalRequeridos = requiredItems.Count;
+        var totalCargados = requiredItems.Count(x => IsChecklistCompliant(x.Estatus));
+        var totalFaltantes = requiredItems.Count(x => x.Estatus == "FALTANTE");
+        var totalPorVencer = requiredItems.Count(x => x.Estatus == "POR_VENCER");
+        var totalVencidos = requiredItems.Count(x => x.Estatus == "VENCIDO");
+
+        var porcentajeCumplimiento = totalRequeridos == 0
+            ? 100m
+            : Math.Round((decimal)totalCargados / totalRequeridos * 100m, 2);
+
+        var dto = new EmpleadoDocumentoChecklistDto
+        {
+            EmpleadoId = empleadoId,
+            TotalRequeridos = totalRequeridos,
+            TotalCargados = totalCargados,
+            TotalFaltantes = totalFaltantes,
+            TotalPorVencer = totalPorVencer,
+            TotalVencidos = totalVencidos,
+            PorcentajeCumplimiento = porcentajeCumplimiento,
+            Items = items
+        };
+
+        return Ok(dto);
     }
 
     [HttpPost("Empleados/{empleadoId:int}/documentos")]
@@ -221,6 +312,34 @@ public class EmpleadoDocumentosController : ControllerBase
         return NoContent();
     }
 
+    private static string ResolveChecklistStatus(
+        EmpleadoDocumento? documento,
+        bool requerido,
+        DateOnly today,
+        DateOnly warningDate)
+    {
+        if (documento is null)
+            return requerido ? "FALTANTE" : "OPCIONAL";
+
+        if (!documento.FechaVencimiento.HasValue)
+            return "CARGADO";
+
+        var fechaVencimiento = documento.FechaVencimiento.Value;
+
+        if (fechaVencimiento < today)
+            return "VENCIDO";
+
+        if (fechaVencimiento <= warningDate)
+            return "POR_VENCER";
+
+        return "CARGADO";
+    }
+
+    private static bool IsChecklistCompliant(string estatus)
+    {
+        return estatus is "CARGADO" or "POR_VENCER";
+    }
+
     private static EmpleadoDocumentoDto ToDto(EmpleadoDocumento entity)
     {
         return new EmpleadoDocumentoDto
@@ -240,4 +359,8 @@ public class EmpleadoDocumentosController : ControllerBase
             UpdatedAtUtc = entity.UpdatedAtUtc
         };
     }
+
+    private sealed record ChecklistDefinition(
+        TipoDocumentoEmpleado Tipo,
+        bool Requerido);
 }
