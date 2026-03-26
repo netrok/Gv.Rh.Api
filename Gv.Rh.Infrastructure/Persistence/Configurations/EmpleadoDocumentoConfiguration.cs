@@ -13,6 +13,8 @@ public class EmpleadoDocumentoConfiguration : IEntityTypeConfiguration<EmpleadoD
         builder.HasKey(x => x.Id);
 
         builder.Property(x => x.Tipo)
+            .HasConversion<string>()
+            .HasMaxLength(50)
             .IsRequired();
 
         builder.Property(x => x.NombreArchivoOriginal)
@@ -43,11 +45,10 @@ public class EmpleadoDocumentoConfiguration : IEntityTypeConfiguration<EmpleadoD
         builder.Property(x => x.CreatedAtUtc)
             .IsRequired();
 
-        builder.Property(x => x.UpdatedAtUtc)
-            .IsRequired();
+        builder.Property(x => x.UpdatedAtUtc);
 
         builder.HasOne(x => x.Empleado)
-            .WithMany()
+            .WithMany(x => x.Documentos)
             .HasForeignKey(x => x.EmpleadoId)
             .OnDelete(DeleteBehavior.Restrict);
 

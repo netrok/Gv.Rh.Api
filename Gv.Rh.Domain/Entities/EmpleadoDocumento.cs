@@ -15,7 +15,6 @@ public class EmpleadoDocumento
     public string NombreArchivoGuardado { get; set; } = string.Empty;
     public string RutaRelativa { get; set; } = string.Empty;
     public string MimeType { get; set; } = string.Empty;
-
     public long TamanoBytes { get; set; }
 
     public DateOnly? FechaDocumento { get; set; }
@@ -25,6 +24,9 @@ public class EmpleadoDocumento
 
     public bool Activo { get; set; } = true;
 
+    public int? CreadoPorUsuarioId { get; set; }
+    public int? ActualizadoPorUsuarioId { get; set; }
+
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime? UpdatedAtUtc { get; set; }
 }

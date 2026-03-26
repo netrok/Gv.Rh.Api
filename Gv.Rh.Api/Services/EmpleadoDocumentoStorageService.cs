@@ -1,5 +1,5 @@
-﻿using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
+﻿using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 
 namespace Gv.Rh.Api.Services;
 
@@ -8,6 +8,12 @@ public interface IEmpleadoDocumentoStorageService
     Task<EmpleadoDocumentoStoredFile> SaveAsync(
         int empleadoId,
         IFormFile archivo,
+        CancellationToken cancellationToken = default);
+
+    Task<EmpleadoDocumentoStoredFile> ReplaceAsync(
+        int empleadoId,
+        IFormFile archivo,
+        string? rutaRelativaAnterior,
         CancellationToken cancellationToken = default);
 
     Stream OpenRead(string rutaRelativa);
@@ -24,7 +30,8 @@ public sealed class EmpleadoDocumentoStorageService : IEmpleadoDocumentoStorageS
         ".pdf",
         ".jpg",
         ".jpeg",
-        ".png"
+        ".png",
+        ".webp"
     };
 
     private static readonly Dictionary<string, string> ContentTypesByExtension = new(StringComparer.OrdinalIgnoreCase)
@@ -32,14 +39,18 @@ public sealed class EmpleadoDocumentoStorageService : IEmpleadoDocumentoStorageS
         [".pdf"] = "application/pdf",
         [".jpg"] = "image/jpeg",
         [".jpeg"] = "image/jpeg",
-        [".png"] = "image/png"
+        [".png"] = "image/png",
+        [".webp"] = "image/webp"
     };
 
-    private readonly IWebHostEnvironment _environment;
+    private readonly ILogger<EmpleadoDocumentoStorageService> _logger;
+    private readonly string _basePath;
 
-    public EmpleadoDocumentoStorageService(IWebHostEnvironment environment)
+    public EmpleadoDocumentoStorageService(ILogger<EmpleadoDocumentoStorageService> logger)
     {
-        _environment = environment;
+        _logger = logger;
+        _basePath = Path.Combine(AppContext.BaseDirectory, "storage", "empleados-documentos");
+        Directory.CreateDirectory(_basePath);
     }
 
     public async Task<EmpleadoDocumentoStoredFile> SaveAsync(
@@ -64,12 +75,11 @@ public sealed class EmpleadoDocumentoStorageService : IEmpleadoDocumentoStorageS
 
         var extension = Path.GetExtension(originalFileName).ToLowerInvariant();
         if (string.IsNullOrWhiteSpace(extension) || !AllowedExtensions.Contains(extension))
-            throw new InvalidOperationException("Solo se permiten archivos PDF, JPG, JPEG o PNG.");
+            throw new InvalidOperationException("Solo se permiten archivos PDF, JPG, JPEG, PNG o WEBP.");
 
         var contentType = ResolveContentType(extension, archivo.ContentType);
 
-        var webRootPath = EnsureWebRootExists();
-        var empleadoFolderPath = Path.Combine(webRootPath, "uploads", "empleados", empleadoId.ToString());
+        var empleadoFolderPath = Path.Combine(_basePath, empleadoId.ToString());
         Directory.CreateDirectory(empleadoFolderPath);
 
         var safeBaseName = SanitizeFileNameWithoutExtension(Path.GetFileNameWithoutExtension(originalFileName));
@@ -83,7 +93,7 @@ public sealed class EmpleadoDocumentoStorageService : IEmpleadoDocumentoStorageS
             await archivo.CopyToAsync(stream, cancellationToken);
         }
 
-        var relativePath = Path.Combine("uploads", "empleados", empleadoId.ToString(), storedFileName)
+        var relativePath = Path.Combine("storage", "empleados-documentos", empleadoId.ToString(), storedFileName)
             .Replace("\\", "/");
 
         return new EmpleadoDocumentoStoredFile
@@ -94,6 +104,22 @@ public sealed class EmpleadoDocumentoStorageService : IEmpleadoDocumentoStorageS
             MimeType = contentType,
             TamanoBytes = archivo.Length
         };
+    }
+
+    public async Task<EmpleadoDocumentoStoredFile> ReplaceAsync(
+        int empleadoId,
+        IFormFile archivo,
+        string? rutaRelativaAnterior,
+        CancellationToken cancellationToken = default)
+    {
+        var stored = await SaveAsync(empleadoId, archivo, cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(rutaRelativaAnterior))
+        {
+            DeleteIfExists(rutaRelativaAnterior);
+        }
+
+        return stored;
     }
 
     public Stream OpenRead(string rutaRelativa)
@@ -116,19 +142,16 @@ public sealed class EmpleadoDocumentoStorageService : IEmpleadoDocumentoStorageS
         if (!File.Exists(fullPath))
             return false;
 
-        File.Delete(fullPath);
-        return true;
-    }
-
-    private string EnsureWebRootExists()
-    {
-        var webRootPath = _environment.WebRootPath;
-
-        if (string.IsNullOrWhiteSpace(webRootPath))
-            webRootPath = Path.Combine(_environment.ContentRootPath, "wwwroot");
-
-        Directory.CreateDirectory(webRootPath);
-        return webRootPath;
+        try
+        {
+            File.Delete(fullPath);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "No se pudo eliminar el archivo físico: {Path}", fullPath);
+            return false;
+        }
     }
 
     private string ResolveAndValidateFullPath(string rutaRelativa)
@@ -141,9 +164,8 @@ public sealed class EmpleadoDocumentoStorageService : IEmpleadoDocumentoStorageS
             .Replace('/', Path.DirectorySeparatorChar)
             .TrimStart(Path.DirectorySeparatorChar);
 
-        var webRootPath = EnsureWebRootExists();
-        var fullPath = Path.GetFullPath(Path.Combine(webRootPath, normalizedRelativePath));
-        var expectedBasePath = Path.GetFullPath(Path.Combine(webRootPath, "uploads", "empleados"));
+        var fullPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, normalizedRelativePath));
+        var expectedBasePath = Path.GetFullPath(_basePath);
 
         if (!fullPath.StartsWith(expectedBasePath, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("La ruta del archivo es inválida.");

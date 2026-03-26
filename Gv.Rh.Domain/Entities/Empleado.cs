@@ -41,4 +41,6 @@ public class Empleado
 
     public int? SucursalId { get; set; }
     public Sucursal? Sucursal { get; set; }
+
+    public ICollection<EmpleadoDocumento> Documentos { get; set; } = new List<EmpleadoDocumento>();
 }

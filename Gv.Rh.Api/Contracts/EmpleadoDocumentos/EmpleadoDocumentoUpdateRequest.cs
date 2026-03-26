@@ -1,15 +1,11 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using Microsoft.AspNetCore.Http;
 
 namespace Gv.Rh.Api.Contracts.EmpleadoDocumentos;
 
-public class EmpleadoDocumentoCreateRequest
+public class EmpleadoDocumentoUpdateRequest
 {
     [Required]
     public int Tipo { get; set; }
-
-    [Required]
-    public IFormFile Archivo { get; set; } = null!;
 
     public DateOnly? FechaDocumento { get; set; }
 

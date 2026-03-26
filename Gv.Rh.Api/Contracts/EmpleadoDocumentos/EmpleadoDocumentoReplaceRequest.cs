@@ -1,16 +1,17 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Http;
 
-namespace Gv.Rh.Application.DTOs.EmpleadosDocumentos;
+namespace Gv.Rh.Api.Contracts.EmpleadoDocumentos;
 
-public class EmpleadoDocumentoUpdateRequest
+public class EmpleadoDocumentoReplaceRequest
 {
     [Required]
-    public int Tipo { get; set; }
+    public IFormFile Archivo { get; set; } = null!;
 
     public DateOnly? FechaDocumento { get; set; }
 
     public DateOnly? FechaVencimiento { get; set; }
 
-    [StringLength(1000)]
+    [MaxLength(1000)]
     public string? Comentario { get; set; }
 }

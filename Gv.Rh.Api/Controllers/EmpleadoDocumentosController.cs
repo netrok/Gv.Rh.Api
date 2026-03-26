@@ -57,7 +57,22 @@ public class EmpleadoDocumentosController : ControllerBase
             .Where(x => x.EmpleadoId == empleadoId && x.Activo)
             .OrderBy(x => x.Tipo)
             .ThenByDescending(x => x.CreatedAtUtc)
-            .Select(x => ToDto(x))
+            .Select(x => new EmpleadoDocumentoDto
+            {
+                Id = x.Id,
+                EmpleadoId = x.EmpleadoId,
+                Tipo = (int)x.Tipo,
+                TipoNombre = x.Tipo.ToString(),
+                NombreArchivoOriginal = x.NombreArchivoOriginal,
+                MimeType = x.MimeType,
+                TamanoBytes = x.TamanoBytes,
+                FechaDocumento = x.FechaDocumento,
+                FechaVencimiento = x.FechaVencimiento,
+                Comentario = x.Comentario,
+                Activo = x.Activo,
+                CreatedAtUtc = x.CreatedAtUtc,
+                UpdatedAtUtc = x.UpdatedAtUtc
+            })
             .ToListAsync(cancellationToken);
 
         return Ok(items);
@@ -201,12 +216,10 @@ public class EmpleadoDocumentosController : ControllerBase
             _db.EmpleadoDocumentos.Add(entity);
             await _db.SaveChangesAsync(cancellationToken);
 
-            var dto = ToDto(entity);
-
             return CreatedAtAction(
                 nameof(GetByEmpleado),
                 new { empleadoId },
-                dto);
+                ToDto(entity));
         }
         catch (InvalidOperationException ex)
         {
@@ -289,6 +302,64 @@ public class EmpleadoDocumentosController : ControllerBase
         await _db.SaveChangesAsync(cancellationToken);
 
         return Ok(ToDto(entity));
+    }
+
+    [HttpPost("EmpleadoDocumentos/{id:int}/reemplazar")]
+    [Consumes("multipart/form-data")]
+    public async Task<ActionResult<EmpleadoDocumentoDto>> Replace(
+        int id,
+        [FromForm] EmpleadoDocumentoReplaceRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!ModelState.IsValid)
+            return ValidationProblem(ModelState);
+
+        if (request.FechaDocumento.HasValue &&
+            request.FechaVencimiento.HasValue &&
+            request.FechaVencimiento.Value < request.FechaDocumento.Value)
+        {
+            return BadRequest(new
+            {
+                message = "La fecha de vencimiento no puede ser menor que la fecha del documento."
+            });
+        }
+
+        var entity = await _db.EmpleadoDocumentos
+            .FirstOrDefaultAsync(x => x.Id == id && x.Activo, cancellationToken);
+
+        if (entity is null)
+            return NotFound(new { message = "El documento no existe." });
+
+        var rutaAnterior = entity.RutaRelativa;
+
+        try
+        {
+            var storedFile = await _storage.ReplaceAsync(
+                entity.EmpleadoId,
+                request.Archivo,
+                rutaAnterior,
+                cancellationToken);
+
+            entity.NombreArchivoOriginal = storedFile.NombreArchivoOriginal;
+            entity.NombreArchivoGuardado = storedFile.NombreArchivoGuardado;
+            entity.RutaRelativa = storedFile.RutaRelativa;
+            entity.MimeType = storedFile.MimeType;
+            entity.TamanoBytes = storedFile.TamanoBytes;
+            entity.FechaDocumento = request.FechaDocumento;
+            entity.FechaVencimiento = request.FechaVencimiento;
+            entity.Comentario = string.IsNullOrWhiteSpace(request.Comentario)
+                ? entity.Comentario
+                : request.Comentario.Trim();
+            entity.UpdatedAtUtc = DateTime.UtcNow;
+
+            await _db.SaveChangesAsync(cancellationToken);
+
+            return Ok(ToDto(entity));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
     }
 
     [HttpDelete("EmpleadoDocumentos/{id:int}")]
