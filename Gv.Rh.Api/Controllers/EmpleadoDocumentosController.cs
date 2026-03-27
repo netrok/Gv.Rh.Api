@@ -52,28 +52,16 @@ public class EmpleadoDocumentosController : ControllerBase
         if (!empleadoExiste)
             return NotFound(new { message = "El empleado no existe." });
 
-        var items = await _db.EmpleadoDocumentos
+        var entities = await _db.EmpleadoDocumentos
             .AsNoTracking()
             .Where(x => x.EmpleadoId == empleadoId && x.Activo)
             .OrderBy(x => x.Tipo)
             .ThenByDescending(x => x.CreatedAtUtc)
-            .Select(x => new EmpleadoDocumentoDto
-            {
-                Id = x.Id,
-                EmpleadoId = x.EmpleadoId,
-                Tipo = (int)x.Tipo,
-                TipoNombre = x.Tipo.ToString(),
-                NombreArchivoOriginal = x.NombreArchivoOriginal,
-                MimeType = x.MimeType,
-                TamanoBytes = x.TamanoBytes,
-                FechaDocumento = x.FechaDocumento,
-                FechaVencimiento = x.FechaVencimiento,
-                Comentario = x.Comentario,
-                Activo = x.Activo,
-                CreatedAtUtc = x.CreatedAtUtc,
-                UpdatedAtUtc = x.UpdatedAtUtc
-            })
             .ToListAsync(cancellationToken);
+
+        var items = entities
+            .Select(ToDto)
+            .ToList();
 
         return Ok(items);
     }
