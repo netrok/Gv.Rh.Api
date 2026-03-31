@@ -20,9 +20,20 @@ public class RhDbContext : DbContext
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Incidencia> Incidencias => Set<Incidencia>();
 
+    // ===== Reclutamiento =====
+    public DbSet<Vacante> Vacantes => Set<Vacante>();
+    public DbSet<Candidato> Candidatos => Set<Candidato>();
+    public DbSet<Postulacion> Postulaciones => Set<Postulacion>();
+    public DbSet<PostulacionSeguimiento> PostulacionesSeguimientos => Set<PostulacionSeguimiento>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        // Secuencia para folios de vacantes
+        modelBuilder.HasSequence<int>("vacantes_folio_seq")
+            .StartsAt(1)
+            .IncrementsBy(1);
 
         // Aplica configuraciones externas tipo IEntityTypeConfiguration<T>
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(RhDbContext).Assembly);
