@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using Gv.Rh.Domain.Common;
+using System.ComponentModel.DataAnnotations;
 
 namespace Gv.Rh.Domain.Entities;
 
@@ -33,6 +34,16 @@ public class Empleado
 
     public bool Activo { get; set; } = true;
 
+    public EstatusLaboralEmpleado EstatusLaboralActual { get; set; } = EstatusLaboralEmpleado.ACTIVO;
+
+    public DateOnly? FechaBajaActual { get; set; }
+
+    public TipoBajaEmpleado? TipoBajaActual { get; set; }
+
+    public DateOnly? FechaReingresoActual { get; set; }
+
+    public bool? Recontratable { get; set; }
+
     public int? DepartamentoId { get; set; }
     public Departamento? Departamento { get; set; }
 
@@ -43,4 +54,6 @@ public class Empleado
     public Sucursal? Sucursal { get; set; }
 
     public ICollection<EmpleadoDocumento> Documentos { get; set; } = new List<EmpleadoDocumento>();
+
+    public ICollection<EmpleadoMovimientoLaboral> MovimientosLaborales { get; set; } = new List<EmpleadoMovimientoLaboral>();
 }

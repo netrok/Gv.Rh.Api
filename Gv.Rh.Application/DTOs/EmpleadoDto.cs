@@ -1,4 +1,6 @@
-﻿namespace Gv.Rh.Application.DTOs.Empleados;
+﻿using Gv.Rh.Domain.Common;
+
+namespace Gv.Rh.Application.DTOs.Empleados;
 
 public class EmpleadoDto
 {
@@ -12,6 +14,12 @@ public class EmpleadoDto
     public string? Email { get; set; }
     public DateOnly FechaIngreso { get; set; }
     public bool Activo { get; set; }
+
+    public EstatusLaboralEmpleado EstatusLaboralActual { get; set; }
+    public DateOnly? FechaBajaActual { get; set; }
+    public TipoBajaEmpleado? TipoBajaActual { get; set; }
+    public DateOnly? FechaReingresoActual { get; set; }
+    public bool? Recontratable { get; set; }
 
     public int? DepartamentoId { get; set; }
     public string? DepartamentoNombre { get; set; }

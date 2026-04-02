@@ -1,11 +1,13 @@
 ﻿using ClosedXML.Excel;
 using Gv.Rh.Application.DTOs.Empleados;
+using Gv.Rh.Domain.Common;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Data;
+using System.Security.Claims;
 
 namespace Gv.Rh.Api.Controllers;
 
@@ -361,6 +363,7 @@ public class EmpleadosController : ControllerBase
             Email = string.IsNullOrWhiteSpace(dto.Email) ? null : dto.Email.Trim(),
             FechaIngreso = dto.FechaIngreso,
             Activo = dto.Activo,
+            EstatusLaboralActual = dto.Activo ? EstatusLaboralEmpleado.ACTIVO : EstatusLaboralEmpleado.BAJA,
             DepartamentoId = relationResult.DepartamentoId,
             PuestoId = dto.PuestoId,
             SucursalId = relationResult.SucursalId
@@ -400,6 +403,7 @@ public class EmpleadosController : ControllerBase
         entity.Email = string.IsNullOrWhiteSpace(dto.Email) ? null : dto.Email.Trim();
         entity.FechaIngreso = dto.FechaIngreso;
         entity.Activo = dto.Activo;
+        entity.EstatusLaboralActual = dto.Activo ? EstatusLaboralEmpleado.ACTIVO : EstatusLaboralEmpleado.BAJA;
         entity.DepartamentoId = relationResult.DepartamentoId;
         entity.PuestoId = dto.PuestoId;
         entity.SucursalId = relationResult.SucursalId;
@@ -418,6 +422,173 @@ public class EmpleadosController : ControllerBase
         return Ok(updated);
     }
 
+    [HttpPost("{id:int}/baja")]
+    public async Task<IActionResult> DarBaja(int id, [FromBody] DarBajaEmpleadoDto dto)
+    {
+        var empleado = await _db.Empleados.FirstOrDefaultAsync(x => x.Id == id);
+        if (empleado is null)
+            return NotFound(new { message = "Empleado no existe." });
+
+        if (!empleado.Activo || empleado.EstatusLaboralActual == EstatusLaboralEmpleado.BAJA)
+            return Conflict(new { message = "El empleado ya está dado de baja." });
+
+        if (dto.FechaBaja < empleado.FechaIngreso)
+            return BadRequest(new { message = "La fecha de baja no puede ser menor a la fecha de ingreso." });
+
+        empleado.Activo = false;
+        empleado.EstatusLaboralActual = EstatusLaboralEmpleado.BAJA;
+        empleado.FechaBajaActual = dto.FechaBaja;
+        empleado.TipoBajaActual = dto.TipoBaja;
+        empleado.Recontratable = dto.Recontratable;
+        empleado.FechaReingresoActual = null;
+
+        var movimiento = new EmpleadoMovimientoLaboral
+        {
+            EmpleadoId = empleado.Id,
+            TipoMovimiento = TipoMovimientoLaboral.BAJA,
+            FechaMovimiento = dto.FechaBaja,
+            TipoBaja = dto.TipoBaja,
+            Motivo = string.IsNullOrWhiteSpace(dto.Motivo) ? null : dto.Motivo.Trim(),
+            Comentario = string.IsNullOrWhiteSpace(dto.Comentario) ? null : dto.Comentario.Trim(),
+            Recontratable = dto.Recontratable,
+            UsuarioResponsableId = TryGetCurrentUserId(),
+            CreatedAtUtc = DateTime.UtcNow
+        };
+
+        _db.EmpleadoMovimientosLaborales.Add(movimiento);
+
+        if (dto.DesactivarUsuario)
+        {
+            var user = await _db.Users.FirstOrDefaultAsync(x => x.EmpleadoId == empleado.Id);
+            if (user is not null)
+            {
+                user.IsActive = false;
+                user.UpdatedAtUtc = DateTime.UtcNow;
+            }
+        }
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            message = "Empleado dado de baja correctamente.",
+            empleado = new
+            {
+                empleado.Id,
+                empleado.NumEmpleado,
+                empleado.Nombres,
+                empleado.ApellidoPaterno,
+                empleado.ApellidoMaterno,
+                empleado.Activo,
+                empleado.EstatusLaboralActual,
+                empleado.FechaBajaActual,
+                empleado.TipoBajaActual,
+                empleado.Recontratable
+            }
+        });
+    }
+
+    [HttpPost("{id:int}/reingreso")]
+    public async Task<IActionResult> Reingresar(int id, [FromBody] ReingresarEmpleadoDto dto)
+    {
+        var empleado = await _db.Empleados.FirstOrDefaultAsync(x => x.Id == id);
+        if (empleado is null)
+            return NotFound(new { message = "Empleado no existe." });
+
+        if (empleado.Activo && empleado.EstatusLaboralActual == EstatusLaboralEmpleado.ACTIVO)
+            return Conflict(new { message = "El empleado ya está activo." });
+
+        if (dto.FechaReingreso < empleado.FechaIngreso)
+            return BadRequest(new { message = "La fecha de reingreso no puede ser menor a la fecha de ingreso original." });
+
+        if (empleado.FechaBajaActual.HasValue && dto.FechaReingreso < empleado.FechaBajaActual.Value)
+            return BadRequest(new { message = "La fecha de reingreso no puede ser menor a la última fecha de baja." });
+
+        var departamentoId = dto.DepartamentoId ?? empleado.DepartamentoId;
+        var puestoId = dto.PuestoId ?? empleado.PuestoId;
+        var sucursalId = dto.SucursalId ?? empleado.SucursalId;
+
+        var relationResult = await ResolveRelationsAsync(departamentoId, puestoId, sucursalId);
+        if (relationResult.Error is not null)
+            return relationResult.Error;
+
+        empleado.Activo = true;
+        empleado.EstatusLaboralActual = EstatusLaboralEmpleado.ACTIVO;
+        empleado.FechaReingresoActual = dto.FechaReingreso;
+        empleado.FechaBajaActual = null;
+        empleado.TipoBajaActual = null;
+        empleado.Recontratable = null;
+        empleado.DepartamentoId = relationResult.DepartamentoId;
+        empleado.PuestoId = puestoId;
+        empleado.SucursalId = relationResult.SucursalId;
+
+        var movimiento = new EmpleadoMovimientoLaboral
+        {
+            EmpleadoId = empleado.Id,
+            TipoMovimiento = TipoMovimientoLaboral.REINGRESO,
+            FechaMovimiento = dto.FechaReingreso,
+            Motivo = "Reingreso",
+            Comentario = string.IsNullOrWhiteSpace(dto.Comentario) ? null : dto.Comentario.Trim(),
+            Recontratable = null,
+            UsuarioResponsableId = TryGetCurrentUserId(),
+            CreatedAtUtc = DateTime.UtcNow
+        };
+
+        _db.EmpleadoMovimientosLaborales.Add(movimiento);
+
+        if (dto.ReactivarUsuario)
+        {
+            var user = await _db.Users.FirstOrDefaultAsync(x => x.EmpleadoId == empleado.Id);
+            if (user is not null)
+            {
+                user.IsActive = true;
+                user.UpdatedAtUtc = DateTime.UtcNow;
+            }
+        }
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            message = "Empleado reingresado correctamente.",
+            empleado = new
+            {
+                empleado.Id,
+                empleado.NumEmpleado,
+                empleado.Nombres,
+                empleado.ApellidoPaterno,
+                empleado.ApellidoMaterno,
+                empleado.Activo,
+                empleado.EstatusLaboralActual,
+                empleado.FechaReingresoActual,
+                empleado.DepartamentoId,
+                empleado.PuestoId,
+                empleado.SucursalId
+            }
+        });
+    }
+
+    [HttpGet("{id:int}/movimientos")]
+    public async Task<IActionResult> GetMovimientos(int id)
+    {
+        var empleadoExists = await _db.Empleados
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id);
+
+        if (!empleadoExists)
+            return NotFound(new { message = "Empleado no existe." });
+
+        var items = await _db.EmpleadoMovimientosLaborales
+            .AsNoTracking()
+            .Where(x => x.EmpleadoId == id)
+            .OrderByDescending(x => x.FechaMovimiento)
+            .ThenByDescending(x => x.CreatedAtUtc)
+            .Select(x => ToMovimientoDto(x))
+            .ToListAsync();
+
+        return Ok(items);
+    }
+
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
@@ -429,6 +600,7 @@ public class EmpleadosController : ControllerBase
             return NoContent();
 
         entity.Activo = false;
+        entity.EstatusLaboralActual = EstatusLaboralEmpleado.BAJA;
         await _db.SaveChangesAsync();
 
         return NoContent();
@@ -445,6 +617,7 @@ public class EmpleadosController : ControllerBase
             return NoContent();
 
         entity.Activo = true;
+        entity.EstatusLaboralActual = EstatusLaboralEmpleado.ACTIVO;
         await _db.SaveChangesAsync();
 
         return NoContent();
@@ -513,6 +686,11 @@ public class EmpleadosController : ControllerBase
             Email = x.Email,
             FechaIngreso = x.FechaIngreso,
             Activo = x.Activo,
+            EstatusLaboralActual = x.EstatusLaboralActual,
+            FechaBajaActual = x.FechaBajaActual,
+            TipoBajaActual = x.TipoBajaActual,
+            FechaReingresoActual = x.FechaReingresoActual,
+            Recontratable = x.Recontratable,
             DepartamentoId = x.DepartamentoId,
             DepartamentoNombre = x.Departamento != null ? x.Departamento.Nombre : null,
             PuestoId = x.PuestoId,
@@ -520,6 +698,34 @@ public class EmpleadosController : ControllerBase
             SucursalId = x.SucursalId,
             SucursalNombre = x.Sucursal != null ? x.Sucursal.Nombre : null
         };
+    }
+
+    private static EmpleadoMovimientoLaboralDto ToMovimientoDto(EmpleadoMovimientoLaboral x)
+    {
+        return new EmpleadoMovimientoLaboralDto
+        {
+            Id = x.Id,
+            EmpleadoId = x.EmpleadoId,
+            TipoMovimiento = x.TipoMovimiento,
+            FechaMovimiento = x.FechaMovimiento,
+            TipoBaja = x.TipoBaja,
+            Motivo = x.Motivo,
+            Comentario = x.Comentario,
+            Recontratable = x.Recontratable,
+            UsuarioResponsableId = x.UsuarioResponsableId,
+            CreatedAtUtc = x.CreatedAtUtc
+        };
+    }
+
+    private int? TryGetCurrentUserId()
+    {
+        var value =
+            User.FindFirstValue(ClaimTypes.NameIdentifier) ??
+            User.FindFirstValue("sub") ??
+            User.FindFirstValue(ClaimTypes.Sid) ??
+            User.FindFirstValue("nameid");
+
+        return int.TryParse(value, out var userId) ? userId : null;
     }
 
     private async Task<long> NextEmpleadoSequenceAsync()

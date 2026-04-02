@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Serialization;
 using Gv.Rh.Api.Middlewares;
@@ -60,15 +62,56 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// CORS (React/Vite)
+// Helper: permite localhost y hosts LAN privados típicos para Vite/React
+static bool IsAllowedFrontendOrigin(string? origin)
+{
+    if (string.IsNullOrWhiteSpace(origin))
+        return false;
+
+    if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+        return false;
+
+    if (!string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+        return false;
+
+    // Puertos típicos del front local
+    if (uri.Port != 5173 && uri.Port != 3000 && uri.Port != 4173)
+        return false;
+
+    var host = uri.Host;
+
+    if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || host == "127.0.0.1")
+        return true;
+
+    if (!IPAddress.TryParse(host, out var ip) || ip.AddressFamily != AddressFamily.InterNetwork)
+        return false;
+
+    var bytes = ip.GetAddressBytes();
+
+    // 10.0.0.0/8
+    if (bytes[0] == 10)
+        return true;
+
+    // 192.168.0.0/16
+    if (bytes[0] == 192 && bytes[1] == 168)
+        return true;
+
+    // 172.16.0.0/12
+    if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+        return true;
+
+    return false;
+}
+
+// CORS
 const string CorsPolicyName = "WebRh";
 builder.Services.AddCors(opt =>
 {
     opt.AddPolicy(CorsPolicyName, p =>
-        p.WithOrigins("http://localhost:5173", "http://localhost:3000")
+        p.SetIsOriginAllowed(IsAllowedFrontendOrigin)
          .AllowAnyHeader()
          .AllowAnyMethod()
-         .AllowCredentials()
     );
 });
 

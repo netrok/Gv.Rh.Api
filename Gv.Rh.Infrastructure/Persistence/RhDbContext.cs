@@ -11,6 +11,7 @@ public class RhDbContext : DbContext
     }
 
     public DbSet<Empleado> Empleados => Set<Empleado>();
+    public DbSet<EmpleadoMovimientoLaboral> EmpleadoMovimientosLaborales => Set<EmpleadoMovimientoLaboral>();
     public DbSet<EmpleadoDocumento> EmpleadoDocumentos => Set<EmpleadoDocumento>();
     public DbSet<Departamento> Departamentos => Set<Departamento>();
     public DbSet<Puesto> Puestos => Set<Puesto>();
@@ -152,6 +153,35 @@ public class RhDbContext : DbContext
             e.Property(x => x.Email)
                 .HasMaxLength(160);
 
+            e.Property(x => x.FechaIngreso)
+                .IsRequired();
+
+            e.Property(x => x.Activo)
+                .IsRequired();
+
+            e.Property(x => x.EstatusLaboralActual)
+                .HasConversion(
+                    v => v.ToString(),
+                    v => string.IsNullOrWhiteSpace(v)
+                        ? EstatusLaboralEmpleado.ACTIVO
+                        : Enum.Parse<EstatusLaboralEmpleado>(v, true))
+                .HasMaxLength(30)
+                .IsRequired();
+
+            e.Property(x => x.TipoBajaActual)
+                .HasConversion(
+                    v => v.HasValue ? v.Value.ToString() : null,
+                    v => string.IsNullOrWhiteSpace(v)
+                        ? (TipoBajaEmpleado?)null
+                        : Enum.Parse<TipoBajaEmpleado>(v, true))
+                .HasMaxLength(50);
+
+            e.Property(x => x.FechaBajaActual);
+
+            e.Property(x => x.FechaReingresoActual);
+
+            e.Property(x => x.Recontratable);
+
             e.HasOne(x => x.Departamento)
                 .WithMany()
                 .HasForeignKey(x => x.DepartamentoId)
@@ -171,6 +201,7 @@ public class RhDbContext : DbContext
             e.HasIndex(x => x.DepartamentoId);
             e.HasIndex(x => x.PuestoId);
             e.HasIndex(x => x.SucursalId);
+            e.HasIndex(x => x.EstatusLaboralActual);
         });
 
         // ===== Users =====
