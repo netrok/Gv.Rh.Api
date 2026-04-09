@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Gv.Rh.Infrastructure.Migrations
 {
     [DbContext(typeof(RhDbContext))]
-    [Migration("20260331033721_AddReclutamientoModule")]
-    partial class AddReclutamientoModule
+    [Migration("20260409190658_AddEmpleadosNumSeq")]
+    partial class AddEmpleadosNumSeq
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -308,10 +308,21 @@ namespace Gv.Rh.Infrastructure.Migrations
                         .HasMaxLength(160)
                         .HasColumnType("character varying(160)");
 
+                    b.Property<string>("EstatusLaboralActual")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.Property<DateOnly?>("FechaBajaActual")
+                        .HasColumnType("date");
+
                     b.Property<DateOnly>("FechaIngreso")
                         .HasColumnType("date");
 
                     b.Property<DateOnly?>("FechaNacimiento")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("FechaReingresoActual")
                         .HasColumnType("date");
 
                     b.Property<string>("Nombres")
@@ -327,6 +338,9 @@ namespace Gv.Rh.Infrastructure.Migrations
                     b.Property<int?>("PuestoId")
                         .HasColumnType("integer");
 
+                    b.Property<bool?>("Recontratable")
+                        .HasColumnType("boolean");
+
                     b.Property<int?>("SucursalId")
                         .HasColumnType("integer");
 
@@ -334,9 +348,15 @@ namespace Gv.Rh.Infrastructure.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)");
 
+                    b.Property<string>("TipoBajaActual")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("DepartamentoId");
+
+                    b.HasIndex("EstatusLaboralActual");
 
                     b.HasIndex("NumEmpleado")
                         .IsUnique();
@@ -425,6 +445,57 @@ namespace Gv.Rh.Infrastructure.Migrations
                     b.HasIndex("EmpleadoId", "Activo");
 
                     b.ToTable("empleado_documentos", (string)null);
+                });
+
+            modelBuilder.Entity("Gv.Rh.Domain.Entities.EmpleadoMovimientoLaboral", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Comentario")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("EmpleadoId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateOnly>("FechaMovimiento")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Motivo")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<bool?>("Recontratable")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("TipoBaja")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("TipoMovimiento")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<int?>("UsuarioResponsableId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EmpleadoId");
+
+                    b.HasIndex("FechaMovimiento");
+
+                    b.HasIndex("TipoMovimiento");
+
+                    b.ToTable("empleado_movimientos_laborales", (string)null);
                 });
 
             modelBuilder.Entity("Gv.Rh.Domain.Entities.Incidencia", b =>
@@ -874,6 +945,17 @@ namespace Gv.Rh.Infrastructure.Migrations
                     b.Navigation("Empleado");
                 });
 
+            modelBuilder.Entity("Gv.Rh.Domain.Entities.EmpleadoMovimientoLaboral", b =>
+                {
+                    b.HasOne("Gv.Rh.Domain.Entities.Empleado", "Empleado")
+                        .WithMany("MovimientosLaborales")
+                        .HasForeignKey("EmpleadoId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Empleado");
+                });
+
             modelBuilder.Entity("Gv.Rh.Domain.Entities.Incidencia", b =>
                 {
                     b.HasOne("Gv.Rh.Domain.Entities.Empleado", "Empleado")
@@ -993,6 +1075,8 @@ namespace Gv.Rh.Infrastructure.Migrations
             modelBuilder.Entity("Gv.Rh.Domain.Entities.Empleado", b =>
                 {
                     b.Navigation("Documentos");
+
+                    b.Navigation("MovimientosLaborales");
                 });
 
             modelBuilder.Entity("Gv.Rh.Domain.Entities.Postulacion", b =>

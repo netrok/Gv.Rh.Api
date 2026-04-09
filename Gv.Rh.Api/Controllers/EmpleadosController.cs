@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Data;
+using System.Data.Common;
 using System.Security.Claims;
 
 namespace Gv.Rh.Api.Controllers;
@@ -728,6 +729,50 @@ public class EmpleadosController : ControllerBase
         return int.TryParse(value, out var userId) ? userId : null;
     }
 
+    private static async Task EnsureEmpleadoSequenceAsync(DbConnection conn)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+DO $$
+DECLARE
+    v_max_num bigint;
+    v_last_value bigint;
+    v_is_called boolean;
+    v_next_value bigint;
+BEGIN
+    CREATE SEQUENCE IF NOT EXISTS public.empleados_num_seq
+        AS bigint
+        START WITH 1
+        INCREMENT BY 1
+        NO MINVALUE
+        NO MAXVALUE
+        NO CYCLE;
+
+    SELECT COALESCE(
+        MAX(NULLIF(regexp_replace(""NumEmpleado"", '\D', '', 'g'), '')::bigint),
+        0
+    )
+    INTO v_max_num
+    FROM empleados;
+
+    SELECT last_value, is_called
+    INTO v_last_value, v_is_called
+    FROM public.empleados_num_seq;
+
+    v_next_value := GREATEST(
+        v_max_num + 1,
+        CASE
+            WHEN v_is_called THEN v_last_value + 1
+            ELSE v_last_value
+        END
+    );
+
+    PERFORM setval('public.empleados_num_seq', v_next_value, false);
+END $$;
+";
+        await cmd.ExecuteNonQueryAsync();
+    }
+
     private async Task<long> NextEmpleadoSequenceAsync()
     {
         var conn = _db.Database.GetDbConnection();
@@ -738,12 +783,14 @@ public class EmpleadosController : ControllerBase
 
         try
         {
+            await EnsureEmpleadoSequenceAsync(conn);
+
             await using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT nextval('empleados_num_seq')";
+            cmd.CommandText = "SELECT nextval('public.empleados_num_seq')";
             var result = await cmd.ExecuteScalarAsync();
 
             if (result is null || result == DBNull.Value)
-                throw new InvalidOperationException("No se pudo obtener el siguiente valor de la secuencia empleados_num_seq.");
+                throw new InvalidOperationException("No se pudo obtener el siguiente valor de la secuencia public.empleados_num_seq.");
 
             return Convert.ToInt64(result);
         }

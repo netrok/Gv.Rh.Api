@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Gv.Rh.Infrastructure.Migrations
 {
     [DbContext(typeof(RhDbContext))]
-    [Migration("20260401225600_AddEmpleadoMovimientosLaborales")]
-    partial class AddEmpleadoMovimientosLaborales
+    [Migration("20260409185607_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
