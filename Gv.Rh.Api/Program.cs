@@ -1,17 +1,19 @@
-using System.Net;
-using System.Net.Sockets;
-using System.Text;
-using System.Text.Json.Serialization;
 using Gv.Rh.Api.Middlewares;
 using Gv.Rh.Api.Services;
 using Gv.Rh.Application.Abstractions.Reports;
+using Gv.Rh.Application.Interfaces.Reclutamiento;
 using Gv.Rh.Infrastructure.Persistence;
 using Gv.Rh.Infrastructure.Reports;
+using Gv.Rh.Infrastructure.Services.Reclutamiento;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using QuestPDF.Infrastructure;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -111,8 +113,7 @@ builder.Services.AddCors(opt =>
     opt.AddPolicy(CorsPolicyName, p =>
         p.SetIsOriginAllowed(IsAllowedFrontendOrigin)
          .AllowAnyHeader()
-         .AllowAnyMethod()
-    );
+         .AllowAnyMethod());
 });
 
 // JWT Auth
@@ -154,6 +155,7 @@ builder.Services.AddScoped<TokenService>();
 builder.Services.AddScoped<IIncidenciasReportService, IncidenciasReportService>();
 builder.Services.AddScoped<IEmpleadosReportService, EmpleadosReportService>();
 builder.Services.AddScoped<IEmpleadoDocumentoStorageService, EmpleadoDocumentoStorageService>();
+builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteService>();
 
 // DbContext (PostgreSQL) + interceptor
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>
