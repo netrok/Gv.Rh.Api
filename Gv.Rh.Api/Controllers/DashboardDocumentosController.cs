@@ -24,7 +24,7 @@ public class DashboardDocumentosController : ControllerBase
         TipoDocumentoEmpleado.ActaNacimiento,
         TipoDocumentoEmpleado.ComprobanteDomicilio,
         TipoDocumentoEmpleado.Contrato,
-        TipoDocumentoEmpleado.ConstanciaFiscal
+        TipoDocumentoEmpleado.CartaPolicia
     ];
 
     public DashboardDocumentosController(RhDbContext db)

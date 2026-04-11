@@ -27,7 +27,7 @@ public class EmpleadoDocumentosController : ControllerBase
         new(TipoDocumentoEmpleado.ActaNacimiento, true),
         new(TipoDocumentoEmpleado.ComprobanteDomicilio, true),
         new(TipoDocumentoEmpleado.Contrato, true),
-        new(TipoDocumentoEmpleado.ConstanciaFiscal, true),
+        new(TipoDocumentoEmpleado.CartaPolicia, true),
         new(TipoDocumentoEmpleado.CertificadoMedico, false),
         new(TipoDocumentoEmpleado.Otro, false),
     ];

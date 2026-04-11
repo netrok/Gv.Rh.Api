@@ -9,7 +9,7 @@ public enum TipoDocumentoEmpleado
     ActaNacimiento = 5,
     ComprobanteDomicilio = 6,
     Contrato = 7,
-    ConstanciaFiscal = 8,
+    CartaPolicia = 8,
     ComprobanteEstudios = 9,
     LicenciaConducir = 10,
     CertificadoMedico = 11,
