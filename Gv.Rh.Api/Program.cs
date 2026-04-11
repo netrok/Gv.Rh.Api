@@ -152,6 +152,7 @@ builder.Services.AddScoped<AuditSaveChangesInterceptor>();
 builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddScoped<TokenService>();
 builder.Services.AddScoped<IIncidenciasReportService, IncidenciasReportService>();
+builder.Services.AddScoped<IEmpleadosReportService, EmpleadosReportService>();
 builder.Services.AddScoped<IEmpleadoDocumentoStorageService, EmpleadoDocumentoStorageService>();
 
 // DbContext (PostgreSQL) + interceptor

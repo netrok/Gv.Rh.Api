@@ -1,4 +1,7 @@
-﻿using ClosedXML.Excel;
+﻿using System.Data;
+using System.Data.Common;
+using System.Security.Claims;
+using Gv.Rh.Application.Abstractions.Reports;
 using Gv.Rh.Application.DTOs.Empleados;
 using Gv.Rh.Domain.Common;
 using Gv.Rh.Domain.Entities;
@@ -6,9 +9,6 @@ using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Data;
-using System.Data.Common;
-using System.Security.Claims;
 
 namespace Gv.Rh.Api.Controllers;
 
@@ -18,10 +18,14 @@ namespace Gv.Rh.Api.Controllers;
 public class EmpleadosController : ControllerBase
 {
     private readonly RhDbContext _db;
+    private readonly IEmpleadosReportService _empleadosReportService;
 
-    public EmpleadosController(RhDbContext db)
+    public EmpleadosController(
+        RhDbContext db,
+        IEmpleadosReportService empleadosReportService)
     {
         _db = db;
+        _empleadosReportService = empleadosReportService;
     }
 
     [HttpGet]
@@ -74,7 +78,7 @@ public class EmpleadosController : ControllerBase
             );
         }
 
-        bool asc = string.Equals(dir, "asc", StringComparison.OrdinalIgnoreCase);
+        var asc = string.Equals(dir, "asc", StringComparison.OrdinalIgnoreCase);
 
         query = (sort?.ToLowerInvariant()) switch
         {
@@ -122,119 +126,22 @@ public class EmpleadosController : ControllerBase
         return emp is null ? NotFound() : Ok(emp);
     }
 
-    [HttpGet("export.xlsx")]
+    [HttpGet("export/xlsx")]
     public async Task<IActionResult> ExportXlsx(
-        [FromQuery] string? q = null,
-        [FromQuery] bool? activo = null,
-        [FromQuery] int? departamentoId = null,
-        [FromQuery] int? puestoId = null,
-        [FromQuery] int? sucursalId = null)
+        [FromQuery] EmpleadosReporteQueryDto query,
+        CancellationToken cancellationToken)
     {
-        var query = _db.Empleados
-            .AsNoTracking()
-            .Include(x => x.Departamento)
-            .Include(x => x.Puesto)
-            .Include(x => x.Sucursal)
-            .AsQueryable();
+        var report = await _empleadosReportService.BuildXlsxAsync(query, cancellationToken);
+        return File(report.Content, report.ContentType, report.FileName);
+    }
 
-        if (activo.HasValue)
-            query = query.Where(x => x.Activo == activo.Value);
-
-        if (departamentoId.HasValue)
-            query = query.Where(x => x.DepartamentoId == departamentoId.Value);
-
-        if (puestoId.HasValue)
-            query = query.Where(x => x.PuestoId == puestoId.Value);
-
-        if (sucursalId.HasValue)
-            query = query.Where(x => x.SucursalId == sucursalId.Value);
-
-        if (!string.IsNullOrWhiteSpace(q))
-        {
-            var term = q.Trim();
-
-            query = query.Where(x =>
-                EF.Functions.ILike(x.NumEmpleado, $"%{term}%") ||
-                EF.Functions.ILike(x.Nombres, $"%{term}%") ||
-                EF.Functions.ILike(x.ApellidoPaterno, $"%{term}%") ||
-                (x.ApellidoMaterno != null && EF.Functions.ILike(x.ApellidoMaterno, $"%{term}%")) ||
-                (x.Email != null && EF.Functions.ILike(x.Email, $"%{term}%")) ||
-                (x.Telefono != null && EF.Functions.ILike(x.Telefono, $"%{term}%")) ||
-                (x.Departamento != null && EF.Functions.ILike(x.Departamento.Nombre, $"%{term}%")) ||
-                (x.Puesto != null && EF.Functions.ILike(x.Puesto.Nombre, $"%{term}%")) ||
-                (x.Sucursal != null && EF.Functions.ILike(x.Sucursal.Nombre, $"%{term}%")) ||
-                (x.Sucursal != null && EF.Functions.ILike(x.Sucursal.Clave, $"%{term}%"))
-            );
-        }
-
-        var rows = await query
-            .OrderBy(x => x.NumEmpleado)
-            .Take(50000)
-            .Select(x => new
-            {
-                x.Id,
-                x.NumEmpleado,
-                x.Nombres,
-                x.ApellidoPaterno,
-                x.ApellidoMaterno,
-                x.Email,
-                x.Telefono,
-                x.FechaIngreso,
-                x.Activo,
-                Departamento = x.Departamento != null ? x.Departamento.Nombre : string.Empty,
-                Puesto = x.Puesto != null ? x.Puesto.Nombre : string.Empty,
-                Sucursal = x.Sucursal != null ? x.Sucursal.Nombre : string.Empty
-            })
-            .ToListAsync();
-
-        using var wb = new XLWorkbook();
-        var ws = wb.Worksheets.Add("Empleados");
-
-        var headers = new[]
-        {
-            "Id", "NumEmpleado", "Nombres", "ApellidoPaterno", "ApellidoMaterno",
-            "Email", "Telefono", "FechaIngreso", "Departamento", "Puesto", "Sucursal", "Activo"
-        };
-
-        for (int i = 0; i < headers.Length; i++)
-        {
-            ws.Cell(1, i + 1).Value = headers[i];
-            ws.Cell(1, i + 1).Style.Font.Bold = true;
-        }
-
-        int r = 2;
-
-        foreach (var x in rows)
-        {
-            ws.Cell(r, 1).Value = x.Id;
-            ws.Cell(r, 2).Value = x.NumEmpleado;
-            ws.Cell(r, 3).Value = x.Nombres;
-            ws.Cell(r, 4).Value = x.ApellidoPaterno;
-            ws.Cell(r, 5).Value = x.ApellidoMaterno ?? string.Empty;
-            ws.Cell(r, 6).Value = x.Email ?? string.Empty;
-            ws.Cell(r, 7).Value = x.Telefono ?? string.Empty;
-            ws.Cell(r, 8).Value = x.FechaIngreso.ToDateTime(TimeOnly.MinValue);
-            ws.Cell(r, 9).Value = x.Departamento;
-            ws.Cell(r, 10).Value = x.Puesto;
-            ws.Cell(r, 11).Value = x.Sucursal;
-            ws.Cell(r, 12).Value = x.Activo;
-            r++;
-        }
-
-        ws.Column(8).Style.DateFormat.Format = "yyyy-mm-dd";
-        ws.SheetView.FreezeRows(1);
-        ws.Columns().AdjustToContents();
-
-        using var ms = new MemoryStream();
-        wb.SaveAs(ms);
-
-        var bytes = ms.ToArray();
-        var fileName = $"empleados_{DateTime.UtcNow:yyyyMMdd_HHmmss}.xlsx";
-
-        return File(
-            bytes,
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            fileName);
+    [HttpGet("export/pdf")]
+    public async Task<IActionResult> ExportPdf(
+        [FromQuery] EmpleadosReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var report = await _empleadosReportService.BuildPdfAsync(query, cancellationToken);
+        return File(report.Content, report.ContentType, report.FileName);
     }
 
     [Authorize(Roles = "ADMIN")]
