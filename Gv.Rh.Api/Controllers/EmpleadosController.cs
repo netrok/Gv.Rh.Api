@@ -19,13 +19,16 @@ public class EmpleadosController : ControllerBase
 {
     private readonly RhDbContext _db;
     private readonly IEmpleadosReportService _empleadosReportService;
+    private readonly IEmpleadoFichaReportService _empleadoFichaReportService;
 
     public EmpleadosController(
         RhDbContext db,
-        IEmpleadosReportService empleadosReportService)
+        IEmpleadosReportService empleadosReportService,
+        IEmpleadoFichaReportService empleadoFichaReportService)
     {
         _db = db;
         _empleadosReportService = empleadosReportService;
+        _empleadoFichaReportService = empleadoFichaReportService;
     }
 
     [HttpGet]
@@ -141,6 +144,15 @@ public class EmpleadosController : ControllerBase
         CancellationToken cancellationToken)
     {
         var report = await _empleadosReportService.BuildPdfAsync(query, cancellationToken);
+        return File(report.Content, report.ContentType, report.FileName);
+    }
+
+    [HttpGet("{id:int}/ficha/pdf")]
+    public async Task<IActionResult> ExportFichaPdf(
+        int id,
+        CancellationToken cancellationToken)
+    {
+        var report = await _empleadoFichaReportService.BuildPdfAsync(id, cancellationToken);
         return File(report.Content, report.ContentType, report.FileName);
     }
 
