@@ -26,11 +26,12 @@ public sealed class EmpleadosReportService : IEmpleadosReportService
         CancellationToken cancellationToken)
     {
         var rows = await GetEmpleadosExportRowsAsync(query, cancellationToken);
+        var filterLabels = await ResolveFilterLabelsAsync(query, cancellationToken);
 
         using var workbook = new XLWorkbook();
 
-        BuildEmpleadosSheet(workbook, rows, query);
-        BuildResumenSheet(workbook, rows, query);
+        BuildEmpleadosSheet(workbook, rows, filterLabels);
+        BuildResumenSheet(workbook, rows, filterLabels);
 
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
@@ -48,46 +49,29 @@ public sealed class EmpleadosReportService : IEmpleadosReportService
         CancellationToken cancellationToken)
     {
         var rows = await GetEmpleadosExportRowsAsync(query, cancellationToken);
+        var filterLabels = await ResolveFilterLabelsAsync(query, cancellationToken);
+        var generatedAtUtc = DateTime.UtcNow;
 
         var pdfBytes = Document.Create(document =>
         {
             document.Page(page =>
             {
-                page.Size(PageSizes.A4);
-                page.Margin(1.5f, Unit.Centimetre);
-                page.DefaultTextStyle(x => x.FontSize(8));
+                page.Size(PageSizes.A4.Landscape());
+                page.Margin(1.2f, Unit.Centimetre);
+                page.DefaultTextStyle(x => x.FontSize(9).FontColor("#1F2937"));
 
-                page.Header().Column(column =>
-                {
-                    column.Spacing(4);
-
-                    column.Item()
-                        .Text("Reporte de empleados")
-                        .SemiBold()
-                        .FontSize(16);
-
-                    column.Item()
-                        .Text($"Generado UTC: {DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)}");
-                });
+                page.Header().Element(container => ComposeHeader(container, generatedAtUtc));
 
                 page.Content().Column(column =>
                 {
                     column.Spacing(10);
 
-                    column.Item().Element(container => ComposeFilters(container, query));
+                    column.Item().Element(container => ComposeFilters(container, filterLabels));
                     column.Item().Element(container => ComposeSummary(container, rows));
                     column.Item().Element(container => ComposeDetailTable(container, rows));
                 });
 
-                page.Footer()
-                    .AlignCenter()
-                    .Text(text =>
-                    {
-                        text.Span("Página ");
-                        text.CurrentPageNumber();
-                        text.Span(" de ");
-                        text.TotalPages();
-                    });
+                page.Footer().Element(container => ComposeFooter(container, generatedAtUtc));
             });
         }).GeneratePdf();
 
@@ -197,10 +181,58 @@ public sealed class EmpleadosReportService : IEmpleadosReportService
         }).ToList();
     }
 
+    private async Task<EmpleadosReportFilterLabels> ResolveFilterLabelsAsync(
+        EmpleadosReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var result = new EmpleadosReportFilterLabels
+        {
+            Sucursal = "(todas)",
+            Departamento = "(todos)",
+            Puesto = "(todos)",
+            Activo = query.Activo.HasValue ? (query.Activo.Value ? "Sí" : "No") : "(todos)",
+            EstatusLaboral = string.IsNullOrWhiteSpace(query.EstatusLaboral)
+                ? "(todos)"
+                : FormatLabel(query.EstatusLaboral),
+            FechaIngresoDesde = query.FechaIngresoDesde?.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture) ?? "(sin límite)",
+            FechaIngresoHasta = query.FechaIngresoHasta?.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture) ?? "(sin límite)",
+            Search = string.IsNullOrWhiteSpace(query.Search) ? "(vacío)" : query.Search.Trim()
+        };
+
+        if (query.SucursalId.HasValue)
+        {
+            result.Sucursal = await _context.Sucursales
+                .AsNoTracking()
+                .Where(x => x.Id == query.SucursalId.Value)
+                .Select(x => x.Nombre)
+                .FirstOrDefaultAsync(cancellationToken) ?? $"#{query.SucursalId.Value}";
+        }
+
+        if (query.DepartamentoId.HasValue)
+        {
+            result.Departamento = await _context.Departamentos
+                .AsNoTracking()
+                .Where(x => x.Id == query.DepartamentoId.Value)
+                .Select(x => x.Nombre)
+                .FirstOrDefaultAsync(cancellationToken) ?? $"#{query.DepartamentoId.Value}";
+        }
+
+        if (query.PuestoId.HasValue)
+        {
+            result.Puesto = await _context.Puestos
+                .AsNoTracking()
+                .Where(x => x.Id == query.PuestoId.Value)
+                .Select(x => x.Nombre)
+                .FirstOrDefaultAsync(cancellationToken) ?? $"#{query.PuestoId.Value}";
+        }
+
+        return result;
+    }
+
     private static void BuildEmpleadosSheet(
         XLWorkbook workbook,
         IReadOnlyList<EmpleadoExportRowDto> rows,
-        EmpleadosReporteQueryDto query)
+        EmpleadosReportFilterLabels filterLabels)
     {
         var ws = workbook.Worksheets.Add("Empleados");
 
@@ -208,55 +240,68 @@ public sealed class EmpleadosReportService : IEmpleadosReportService
         ws.Cell(2, 1).Value = "Generado UTC";
         ws.Cell(2, 2).Value = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
-        WriteFilters(ws, query, 4);
+        ws.Range(1, 1, 1, 10).Merge().Style.Font.Bold = true;
+        ws.Range(1, 1, 1, 10).Style.Font.FontSize = 16;
+        ws.Range(1, 1, 1, 10).Style.Font.FontColor = XLColor.FromHtml("#0F172A");
+
+        WriteFilters(ws, filterLabels, 4);
 
         const int headerRow = 13;
 
-        ws.Cell(headerRow, 1).Value = "ID";
-        ws.Cell(headerRow, 2).Value = "NumEmpleado";
-        ws.Cell(headerRow, 3).Value = "Nombre";
-        ws.Cell(headerRow, 4).Value = "Sucursal";
-        ws.Cell(headerRow, 5).Value = "Departamento";
-        ws.Cell(headerRow, 6).Value = "Puesto";
-        ws.Cell(headerRow, 7).Value = "FechaIngreso";
-        ws.Cell(headerRow, 8).Value = "Telefono";
-        ws.Cell(headerRow, 9).Value = "Email";
-        ws.Cell(headerRow, 10).Value = "EstatusLaboral";
-        ws.Cell(headerRow, 11).Value = "Activo";
+        ws.Cell(headerRow, 1).Value = "Núm. Emp.";
+        ws.Cell(headerRow, 2).Value = "Nombre";
+        ws.Cell(headerRow, 3).Value = "Sucursal";
+        ws.Cell(headerRow, 4).Value = "Departamento";
+        ws.Cell(headerRow, 5).Value = "Puesto";
+        ws.Cell(headerRow, 6).Value = "Ingreso";
+        ws.Cell(headerRow, 7).Value = "Teléfono";
+        ws.Cell(headerRow, 8).Value = "Correo";
+        ws.Cell(headerRow, 9).Value = "Estatus laboral";
+        ws.Cell(headerRow, 10).Value = "Activo";
 
         var rowIndex = headerRow + 1;
 
         foreach (var item in rows)
         {
-            ws.Cell(rowIndex, 1).Value = item.Id;
-            ws.Cell(rowIndex, 2).Value = item.NumEmpleado;
-            ws.Cell(rowIndex, 3).Value = item.NombreCompleto;
-            ws.Cell(rowIndex, 4).Value = item.Sucursal ?? string.Empty;
-            ws.Cell(rowIndex, 5).Value = item.Departamento ?? string.Empty;
-            ws.Cell(rowIndex, 6).Value = item.Puesto ?? string.Empty;
-            ws.Cell(rowIndex, 7).Value = item.FechaIngreso.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-            ws.Cell(rowIndex, 8).Value = item.Telefono ?? string.Empty;
-            ws.Cell(rowIndex, 9).Value = item.Email ?? string.Empty;
-            ws.Cell(rowIndex, 10).Value = item.EstatusLaboral;
-            ws.Cell(rowIndex, 11).Value = item.Activo;
+            ws.Cell(rowIndex, 1).Value = item.NumEmpleado;
+            ws.Cell(rowIndex, 2).Value = item.NombreCompleto;
+            ws.Cell(rowIndex, 3).Value = item.Sucursal ?? string.Empty;
+            ws.Cell(rowIndex, 4).Value = item.Departamento ?? string.Empty;
+            ws.Cell(rowIndex, 5).Value = item.Puesto ?? string.Empty;
+            ws.Cell(rowIndex, 6).Value = item.FechaIngreso.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture);
+            ws.Cell(rowIndex, 7).Value = item.Telefono ?? string.Empty;
+            ws.Cell(rowIndex, 8).Value = item.Email ?? string.Empty;
+            ws.Cell(rowIndex, 9).Value = FormatLabel(item.EstatusLaboral);
+            ws.Cell(rowIndex, 10).Value = item.Activo;
             rowIndex++;
         }
 
-        var headerRange = ws.Range(headerRow, 1, headerRow, 11);
+        var headerRange = ws.Range(headerRow, 1, headerRow, 10);
         headerRange.Style.Font.Bold = true;
-        headerRange.Style.Fill.BackgroundColor = XLColor.LightGray;
+        headerRange.Style.Font.FontColor = XLColor.White;
+        headerRange.Style.Fill.BackgroundColor = XLColor.FromHtml("#1D4ED8");
+        headerRange.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
 
         var lastDataRow = Math.Max(headerRow + 1, rowIndex - 1);
-        ws.Range(headerRow, 1, lastDataRow, 11).SetAutoFilter();
-
+        ws.Range(headerRow, 1, lastDataRow, 10).SetAutoFilter();
         ws.SheetView.FreezeRows(headerRow);
-        ws.Columns().AdjustToContents();
+
+        ws.Column(1).Width = 14;
+        ws.Column(2).Width = 30;
+        ws.Column(3).Width = 22;
+        ws.Column(4).Width = 22;
+        ws.Column(5).Width = 22;
+        ws.Column(6).Width = 14;
+        ws.Column(7).Width = 16;
+        ws.Column(8).Width = 28;
+        ws.Column(9).Width = 18;
+        ws.Column(10).Width = 12;
     }
 
     private static void BuildResumenSheet(
         XLWorkbook workbook,
         IReadOnlyList<EmpleadoExportRowDto> rows,
-        EmpleadosReporteQueryDto query)
+        EmpleadosReportFilterLabels filterLabels)
     {
         var ws = workbook.Worksheets.Add("Resumen");
 
@@ -264,7 +309,7 @@ public sealed class EmpleadosReportService : IEmpleadosReportService
         ws.Cell(2, 1).Value = "Generado UTC";
         ws.Cell(2, 2).Value = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
-        WriteFilters(ws, query, 4);
+        WriteFilters(ws, filterLabels, 4);
 
         ws.Cell(13, 1).Value = "Total";
         ws.Cell(13, 2).Value = rows.Count;
@@ -280,7 +325,7 @@ public sealed class EmpleadosReportService : IEmpleadosReportService
         ws.Cell(18, 2).Value = "Cantidad";
 
         var statusRow = 19;
-        foreach (var group in rows.GroupBy(x => x.EstatusLaboral).OrderBy(x => x.Key))
+        foreach (var group in rows.GroupBy(x => FormatLabel(x.EstatusLaboral)).OrderBy(x => x.Key))
         {
             ws.Cell(statusRow, 1).Value = group.Key;
             ws.Cell(statusRow, 2).Value = group.Count();
@@ -305,92 +350,124 @@ public sealed class EmpleadosReportService : IEmpleadosReportService
         ws.Columns().AdjustToContents();
     }
 
-    private static void WriteFilters(IXLWorksheet ws, EmpleadosReporteQueryDto query, int startRow)
+    private static void WriteFilters(
+        IXLWorksheet ws,
+        EmpleadosReportFilterLabels filterLabels,
+        int startRow)
     {
-        ws.Cell(startRow, 1).Value = "SucursalId";
-        ws.Cell(startRow, 2).Value = query.SucursalId?.ToString(CultureInfo.InvariantCulture) ?? "(todas)";
+        ws.Cell(startRow, 1).Value = "Sucursal";
+        ws.Cell(startRow, 2).Value = filterLabels.Sucursal;
 
-        ws.Cell(startRow + 1, 1).Value = "DepartamentoId";
-        ws.Cell(startRow + 1, 2).Value = query.DepartamentoId?.ToString(CultureInfo.InvariantCulture) ?? "(todos)";
+        ws.Cell(startRow + 1, 1).Value = "Departamento";
+        ws.Cell(startRow + 1, 2).Value = filterLabels.Departamento;
 
-        ws.Cell(startRow + 2, 1).Value = "PuestoId";
-        ws.Cell(startRow + 2, 2).Value = query.PuestoId?.ToString(CultureInfo.InvariantCulture) ?? "(todos)";
+        ws.Cell(startRow + 2, 1).Value = "Puesto";
+        ws.Cell(startRow + 2, 2).Value = filterLabels.Puesto;
 
         ws.Cell(startRow + 3, 1).Value = "Activo";
-        ws.Cell(startRow + 3, 2).Value = query.Activo.HasValue ? (query.Activo.Value ? "Sí" : "No") : "(todos)";
+        ws.Cell(startRow + 3, 2).Value = filterLabels.Activo;
 
-        ws.Cell(startRow + 4, 1).Value = "EstatusLaboral";
-        ws.Cell(startRow + 4, 2).Value = query.EstatusLaboral ?? "(todos)";
+        ws.Cell(startRow + 4, 1).Value = "Estatus laboral";
+        ws.Cell(startRow + 4, 2).Value = filterLabels.EstatusLaboral;
 
-        ws.Cell(startRow + 5, 1).Value = "FechaIngresoDesde";
-        ws.Cell(startRow + 5, 2).Value = query.FechaIngresoDesde?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "(sin límite)";
+        ws.Cell(startRow + 5, 1).Value = "Ingreso desde";
+        ws.Cell(startRow + 5, 2).Value = filterLabels.FechaIngresoDesde;
 
-        ws.Cell(startRow + 6, 1).Value = "FechaIngresoHasta";
-        ws.Cell(startRow + 6, 2).Value = query.FechaIngresoHasta?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "(sin límite)";
+        ws.Cell(startRow + 6, 1).Value = "Ingreso hasta";
+        ws.Cell(startRow + 6, 2).Value = filterLabels.FechaIngresoHasta;
 
-        ws.Cell(startRow + 7, 1).Value = "Search";
-        ws.Cell(startRow + 7, 2).Value = query.Search ?? "(vacío)";
+        ws.Cell(startRow + 7, 1).Value = "Búsqueda";
+        ws.Cell(startRow + 7, 2).Value = filterLabels.Search;
 
         ws.Range(startRow, 1, startRow + 7, 1).Style.Font.Bold = true;
     }
 
-    private static void ComposeFilters(IContainer container, EmpleadosReporteQueryDto query)
+    private static void ComposeHeader(IContainer container, DateTime generatedAtUtc)
+    {
+        container.PaddingBottom(6).Column(column =>
+        {
+            column.Item().Row(row =>
+            {
+                row.RelativeItem().Column(left =>
+                {
+                    left.Spacing(2);
+
+                    left.Item().Text("GV RH · Recursos Humanos")
+                        .FontSize(10)
+                        .FontColor("#475569")
+                        .SemiBold();
+
+                    left.Item().Text("Reporte de empleados")
+                        .FontSize(20)
+                        .FontColor("#0F172A")
+                        .Bold();
+
+                    left.Item().Text($"Generado UTC: {generatedAtUtc:yyyy-MM-dd HH:mm:ss}")
+                        .FontSize(9)
+                        .FontColor("#64748B");
+                });
+
+                row.ConstantItem(180).AlignRight().AlignMiddle().Text("Reporte corporativo")
+                    .FontSize(9)
+                    .FontColor("#1D4ED8")
+                    .SemiBold();
+            });
+
+            column.Item().PaddingTop(6).LineHorizontal(1).LineColor("#D7DFEA");
+        });
+    }
+
+    private static void ComposeFilters(
+        IContainer container,
+        EmpleadosReportFilterLabels filterLabels)
     {
         container
+            .Background("#F8FAFC")
             .Border(1)
-            .Padding(8)
+            .BorderColor("#D7DFEA")
+            .CornerRadius(8)
+            .Padding(10)
             .Column(column =>
             {
-                column.Spacing(2);
+                column.Spacing(8);
 
-                column.Item().Text(text =>
-                {
-                    text.Span("SucursalId: ").SemiBold();
-                    text.Span(query.SucursalId?.ToString(CultureInfo.InvariantCulture) ?? "(todas)");
-                });
+                column.Item().Text("Filtros aplicados")
+                    .FontSize(11)
+                    .Bold()
+                    .FontColor("#0F172A");
 
-                column.Item().Text(text =>
+                column.Item().Row(row =>
                 {
-                    text.Span("DepartamentoId: ").SemiBold();
-                    text.Span(query.DepartamentoId?.ToString(CultureInfo.InvariantCulture) ?? "(todos)");
-                });
+                    row.Spacing(18);
 
-                column.Item().Text(text =>
-                {
-                    text.Span("PuestoId: ").SemiBold();
-                    text.Span(query.PuestoId?.ToString(CultureInfo.InvariantCulture) ?? "(todos)");
-                });
+                    row.RelativeItem().Column(left =>
+                    {
+                        left.Spacing(4);
+                        AddFilterText(left, "Sucursal", filterLabels.Sucursal);
+                        AddFilterText(left, "Departamento", filterLabels.Departamento);
+                        AddFilterText(left, "Puesto", filterLabels.Puesto);
+                        AddFilterText(left, "Activo", filterLabels.Activo);
+                    });
 
-                column.Item().Text(text =>
-                {
-                    text.Span("Activo: ").SemiBold();
-                    text.Span(query.Activo.HasValue ? (query.Activo.Value ? "Sí" : "No") : "(todos)");
-                });
-
-                column.Item().Text(text =>
-                {
-                    text.Span("EstatusLaboral: ").SemiBold();
-                    text.Span(query.EstatusLaboral ?? "(todos)");
-                });
-
-                column.Item().Text(text =>
-                {
-                    text.Span("FechaIngresoDesde: ").SemiBold();
-                    text.Span(query.FechaIngresoDesde?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "(sin límite)");
-                });
-
-                column.Item().Text(text =>
-                {
-                    text.Span("FechaIngresoHasta: ").SemiBold();
-                    text.Span(query.FechaIngresoHasta?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "(sin límite)");
-                });
-
-                column.Item().Text(text =>
-                {
-                    text.Span("Search: ").SemiBold();
-                    text.Span(query.Search ?? "(vacío)");
+                    row.RelativeItem().Column(right =>
+                    {
+                        right.Spacing(4);
+                        AddFilterText(right, "Estatus laboral", filterLabels.EstatusLaboral);
+                        AddFilterText(right, "Ingreso desde", filterLabels.FechaIngresoDesde);
+                        AddFilterText(right, "Ingreso hasta", filterLabels.FechaIngresoHasta);
+                        AddFilterText(right, "Búsqueda", filterLabels.Search);
+                    });
                 });
             });
+    }
+
+    private static void AddFilterText(ColumnDescriptor column, string label, string value)
+    {
+        column.Item().Text(text =>
+        {
+            text.Span($"{label}: ").SemiBold().FontColor("#334155");
+            text.Span(value).FontColor("#0F172A");
+        });
     }
 
     private static void ComposeSummary(IContainer container, IReadOnlyList<EmpleadoExportRowDto> rows)
@@ -398,80 +475,219 @@ public sealed class EmpleadosReportService : IEmpleadosReportService
         var activos = rows.Count(x => x.Activo == "Sí");
         var inactivos = rows.Count(x => x.Activo == "No");
 
+        container.Row(row =>
+        {
+            row.Spacing(10);
+
+            SummaryCard(
+                row.RelativeItem(),
+                "Total de empleados",
+                rows.Count.ToString(CultureInfo.InvariantCulture),
+                "Registros visibles en el reporte",
+                "#1D4ED8");
+
+            SummaryCard(
+                row.RelativeItem(),
+                "Activos",
+                activos.ToString(CultureInfo.InvariantCulture),
+                "Personal vigente",
+                "#15803D");
+
+            SummaryCard(
+                row.RelativeItem(),
+                "Inactivos",
+                inactivos.ToString(CultureInfo.InvariantCulture),
+                "Personal no activo",
+                "#B45309");
+        });
+    }
+
+    private static void SummaryCard(
+        IContainer container,
+        string title,
+        string value,
+        string subtitle,
+        string accentColor)
+    {
         container
+            .Background("#FFFFFF")
             .Border(1)
-            .Padding(8)
+            .BorderColor("#D7DFEA")
+            .CornerRadius(8)
+            .Padding(12)
             .Column(column =>
             {
                 column.Spacing(4);
 
-                column.Item().Text("Resumen").SemiBold().FontSize(11);
+                column.Item().LineHorizontal(3).LineColor(accentColor);
 
-                column.Item().Row(row =>
-                {
-                    row.RelativeItem().Text($"Total: {rows.Count}");
-                    row.RelativeItem().Text($"Activos: {activos}");
-                    row.RelativeItem().Text($"Inactivos: {inactivos}");
-                });
+                column.Item().PaddingTop(4).Text(title)
+                    .FontSize(10)
+                    .SemiBold()
+                    .FontColor("#475569");
+
+                column.Item().Text(value)
+                    .FontSize(19)
+                    .Bold()
+                    .FontColor(accentColor);
+
+                column.Item().Text(subtitle)
+                    .FontSize(8.5f)
+                    .FontColor("#64748B");
             });
     }
 
     private static void ComposeDetailTable(IContainer container, IReadOnlyList<EmpleadoExportRowDto> rows)
     {
-        container.Table(table =>
+        container.Column(column =>
         {
-            table.ColumnsDefinition(columns =>
-            {
-                columns.ConstantColumn(32);
-                columns.ConstantColumn(60);
-                columns.RelativeColumn(2.2f);
-                columns.RelativeColumn(1.5f);
-                columns.RelativeColumn(1.5f);
-                columns.RelativeColumn(1.5f);
-                columns.ConstantColumn(58);
-                columns.RelativeColumn(1.5f);
-                columns.RelativeColumn(1.8f);
-                columns.RelativeColumn(1.4f);
-            });
+            column.Spacing(6);
 
-            table.Header(header =>
-            {
-                header.Cell().Element(HeaderCellStyle).Text("ID").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("NumEmp").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Nombre").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Sucursal").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Depto").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Puesto").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Ingreso").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Telefono").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Email").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Estatus").SemiBold();
-            });
+            column.Item().Text("Detalle de empleados")
+                .FontSize(11)
+                .Bold()
+                .FontColor("#0F172A");
 
-            foreach (var item in rows)
+            column.Item().Table(table =>
             {
-                table.Cell().Element(DataCellStyle).Text(item.Id.ToString(CultureInfo.InvariantCulture));
-                table.Cell().Element(DataCellStyle).Text(item.NumEmpleado);
-                table.Cell().Element(DataCellStyle).Text(item.NombreCompleto);
-                table.Cell().Element(DataCellStyle).Text(item.Sucursal ?? string.Empty);
-                table.Cell().Element(DataCellStyle).Text(item.Departamento ?? string.Empty);
-                table.Cell().Element(DataCellStyle).Text(item.Puesto ?? string.Empty);
-                table.Cell().Element(DataCellStyle).Text(item.FechaIngreso.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
-                table.Cell().Element(DataCellStyle).Text(item.Telefono ?? string.Empty);
-                table.Cell().Element(DataCellStyle).Text(item.Email ?? string.Empty);
-                table.Cell().Element(DataCellStyle).Text(item.EstatusLaboral);
-            }
+                table.ColumnsDefinition(columns =>
+                {
+                    columns.ConstantColumn(76);    // NumEmp
+                    columns.RelativeColumn(3.0f);  // Nombre
+                    columns.RelativeColumn(1.9f);  // Sucursal
+                    columns.RelativeColumn(1.8f);  // Departamento
+                    columns.RelativeColumn(1.7f);  // Puesto
+                    columns.ConstantColumn(66);    // Ingreso
+                    columns.ConstantColumn(82);    // Teléfono
+                    columns.RelativeColumn(2.5f);  // Correo
+                    columns.ConstantColumn(74);    // Estatus
+                    columns.ConstantColumn(46);    // Activo
+                });
+
+                table.Header(header =>
+                {
+                    header.Cell().Element(HeaderCellStyle).Text("Núm. Emp.").SemiBold();
+                    header.Cell().Element(HeaderCellStyle).Text("Nombre").SemiBold();
+                    header.Cell().Element(HeaderCellStyle).Text("Sucursal").SemiBold();
+                    header.Cell().Element(HeaderCellStyle).Text("Departamento").SemiBold();
+                    header.Cell().Element(HeaderCellStyle).Text("Puesto").SemiBold();
+                    header.Cell().Element(HeaderCellStyle).Text("Ingreso").SemiBold();
+                    header.Cell().Element(HeaderCellStyle).Text("Teléfono").SemiBold();
+                    header.Cell().Element(HeaderCellStyle).Text("Correo").SemiBold();
+                    header.Cell().Element(HeaderCellStyle).Text("Estatus").SemiBold();
+                    header.Cell().Element(HeaderCellStyle).Text("Activo").SemiBold();
+                });
+
+                if (rows.Count == 0)
+                {
+                    table.Cell()
+                        .ColumnSpan(10)
+                        .Element(EmptyCellStyle)
+                        .Text("No se encontraron empleados con los filtros aplicados.");
+                    return;
+                }
+
+                var index = 0;
+                foreach (var item in rows)
+                {
+                    var background = index % 2 == 0 ? "#FFFFFF" : "#FAFCFF";
+
+                    table.Cell().Element(c => DataCellStyle(c, background, true)).Text(item.NumEmpleado);
+                    table.Cell().Element(c => DataCellStyle(c, background)).Text(item.NombreCompleto);
+                    table.Cell().Element(c => DataCellStyle(c, background)).Text(item.Sucursal ?? "—");
+                    table.Cell().Element(c => DataCellStyle(c, background)).Text(item.Departamento ?? "—");
+                    table.Cell().Element(c => DataCellStyle(c, background)).Text(item.Puesto ?? "—");
+                    table.Cell().Element(c => DataCellStyle(c, background)).Text(item.FechaIngreso.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture));
+                    table.Cell().Element(c => DataCellStyle(c, background)).Text(item.Telefono ?? "—");
+                    table.Cell().Element(c => DataCellStyle(c, background)).Text(item.Email ?? "—");
+                    table.Cell().Element(c => DataCellStyle(c, background)).Text(FormatLabel(item.EstatusLaboral));
+                    table.Cell().Element(c => DataCellStyle(c, background)).Text(item.Activo);
+
+                    index++;
+                }
+            });
         });
     }
 
     private static IContainer HeaderCellStyle(IContainer container)
     {
-        return container.Border(1).Padding(3);
+        return container
+            .Background("#214FC6")
+            .Border(1)
+            .BorderColor("#214FC6")
+            .PaddingVertical(7)
+            .PaddingHorizontal(6)
+            .AlignCenter()
+            .AlignMiddle()
+            .DefaultTextStyle(x => x.FontColor("#FFFFFF").FontSize(8.1f).SemiBold());
     }
 
-    private static IContainer DataCellStyle(IContainer container)
+    private static IContainer DataCellStyle(
+        IContainer container,
+        string background,
+        bool emphasis = false)
     {
-        return container.BorderBottom(1).BorderLeft(1).BorderRight(1).Padding(3);
+        return container
+            .Background(background)
+            .BorderBottom(1)
+            .BorderLeft(1)
+            .BorderRight(1)
+            .BorderColor("#DCE4F0")
+            .PaddingVertical(6)
+            .PaddingHorizontal(6)
+            .DefaultTextStyle(x =>
+            {
+                var style = x.FontSize(8.6f).FontColor("#1F2937");
+                return emphasis ? style.SemiBold() : style;
+            });
+    }
+
+    private static IContainer EmptyCellStyle(IContainer container)
+    {
+        return container
+            .Border(1)
+            .BorderColor("#D7DFEA")
+            .Padding(10)
+            .AlignCenter()
+            .AlignMiddle()
+            .DefaultTextStyle(x => x.FontSize(9).FontColor("#64748B"));
+    }
+
+    private static void ComposeFooter(IContainer container, DateTime generatedAtUtc)
+    {
+        container.PaddingTop(6).Column(column =>
+        {
+            column.Item().LineHorizontal(1).LineColor("#D7DFEA");
+
+            column.Item().PaddingTop(4).Row(row =>
+            {
+                row.RelativeItem().Text($"Emitido: {generatedAtUtc:yyyy-MM-dd HH:mm:ss} UTC")
+                    .FontSize(8)
+                    .FontColor("#64748B");
+
+                row.ConstantItem(90).AlignRight().Text(text =>
+                {
+                    text.Span("Página ").FontSize(8).FontColor("#64748B");
+                    text.CurrentPageNumber().FontSize(8).SemiBold();
+                    text.Span(" de ").FontSize(8).FontColor("#64748B");
+                    text.TotalPages().FontSize(8).SemiBold();
+                });
+            });
+        });
+    }
+
+    private static string FormatLabel(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "—";
+
+        return string.Join(
+            " ",
+            value.Trim()
+                .Replace("_", " ")
+                .ToLowerInvariant()
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Select(word => char.ToUpperInvariant(word[0]) + word[1..]));
     }
 
     private static string BuildFileName(EmpleadosReporteQueryDto query, string extension)
@@ -495,5 +711,17 @@ public sealed class EmpleadosReportService : IEmpleadosReportService
             parts.Add(query.Activo.Value ? "activos" : "inactivos");
 
         return string.Join("_", parts) + "." + extension;
+    }
+
+    private sealed class EmpleadosReportFilterLabels
+    {
+        public string Sucursal { get; set; } = "(todas)";
+        public string Departamento { get; set; } = "(todos)";
+        public string Puesto { get; set; } = "(todos)";
+        public string Activo { get; set; } = "(todos)";
+        public string EstatusLaboral { get; set; } = "(todos)";
+        public string FechaIngresoDesde { get; set; } = "(sin límite)";
+        public string FechaIngresoHasta { get; set; } = "(sin límite)";
+        public string Search { get; set; } = "(vacío)";
     }
 }
