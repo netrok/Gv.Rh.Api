@@ -1,6 +1,7 @@
 ﻿using System.Data;
 using System.Data.Common;
 using System.Security.Claims;
+using System.Text.RegularExpressions;
 using Gv.Rh.Application.Abstractions.Reports;
 using Gv.Rh.Application.DTOs.Empleados;
 using Gv.Rh.Domain.Common;
@@ -20,6 +21,21 @@ public class EmpleadosController : ControllerBase
     private readonly RhDbContext _db;
     private readonly IEmpleadosReportService _empleadosReportService;
     private readonly IEmpleadoFichaReportService _empleadoFichaReportService;
+
+    private static readonly Regex CurpRegex =
+        new(@"^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$", RegexOptions.Compiled);
+
+    private static readonly Regex RfcRegex =
+        new(@"^([A-Z&Ñ]{3,4})\d{6}([A-Z\d]{3})$", RegexOptions.Compiled);
+
+    private static readonly Regex NssRegex =
+        new(@"^\d{11}$", RegexOptions.Compiled);
+
+    private static readonly Regex CpRegex =
+        new(@"^\d{5}$", RegexOptions.Compiled);
+
+    private static readonly Regex PhoneRegex =
+        new(@"^\d{10,15}$", RegexOptions.Compiled);
 
     public EmpleadosController(
         RhDbContext db,
@@ -74,6 +90,9 @@ public class EmpleadosController : ControllerBase
                 EF.Functions.ILike(e.ApellidoPaterno, $"%{q}%") ||
                 (e.ApellidoMaterno != null && EF.Functions.ILike(e.ApellidoMaterno, $"%{q}%")) ||
                 (e.Email != null && EF.Functions.ILike(e.Email, $"%{q}%")) ||
+                (e.Curp != null && EF.Functions.ILike(e.Curp, $"%{q}%")) ||
+                (e.Rfc != null && EF.Functions.ILike(e.Rfc, $"%{q}%")) ||
+                (e.Nss != null && EF.Functions.ILike(e.Nss, $"%{q}%")) ||
                 (e.Departamento != null && EF.Functions.ILike(e.Departamento.Nombre, $"%{q}%")) ||
                 (e.Puesto != null && EF.Functions.ILike(e.Puesto.Nombre, $"%{q}%")) ||
                 (e.Sucursal != null && EF.Functions.ILike(e.Sucursal.Nombre, $"%{q}%")) ||
@@ -269,6 +288,33 @@ public class EmpleadosController : ControllerBase
         if (relationResult.Error is not null)
             return relationResult.Error;
 
+        var validationError = ValidateEmpleadoExtendedFields(
+            dto.Curp,
+            dto.Rfc,
+            dto.Nss,
+            dto.Telefono,
+            dto.DireccionCodigoPostal,
+            dto.ContactoEmergenciaTelefono);
+
+        if (validationError is not null)
+            return validationError;
+
+        var normalizedCurp = NormalizeUpperNullable(dto.Curp);
+        var normalizedRfc = NormalizeUpperNullable(dto.Rfc);
+        var normalizedNss = DigitsOnly(dto.Nss);
+        var normalizedTelefono = DigitsOnly(dto.Telefono);
+        var normalizedCp = DigitsOnly(dto.DireccionCodigoPostal);
+        var normalizedContactoTelefono = DigitsOnly(dto.ContactoEmergenciaTelefono);
+
+        var duplicatedIdentityError = await ValidateDuplicateIdentityAsync(
+            null,
+            normalizedCurp,
+            normalizedRfc,
+            normalizedNss);
+
+        if (duplicatedIdentityError is not null)
+            return duplicatedIdentityError;
+
         var next = await NextEmpleadoSequenceAsync();
         var numEmpleado = $"EMP-{next:000000}";
 
@@ -277,16 +323,35 @@ public class EmpleadosController : ControllerBase
             NumEmpleado = numEmpleado,
             Nombres = dto.Nombres.Trim(),
             ApellidoPaterno = dto.ApellidoPaterno.Trim(),
-            ApellidoMaterno = string.IsNullOrWhiteSpace(dto.ApellidoMaterno) ? null : dto.ApellidoMaterno.Trim(),
+            ApellidoMaterno = NormalizeNullable(dto.ApellidoMaterno),
             FechaNacimiento = dto.FechaNacimiento,
-            Telefono = string.IsNullOrWhiteSpace(dto.Telefono) ? null : dto.Telefono.Trim(),
-            Email = string.IsNullOrWhiteSpace(dto.Email) ? null : dto.Email.Trim(),
+            Telefono = normalizedTelefono,
+            Email = NormalizeLowerNullable(dto.Email),
             FechaIngreso = dto.FechaIngreso,
             Activo = dto.Activo,
             EstatusLaboralActual = dto.Activo ? EstatusLaboralEmpleado.ACTIVO : EstatusLaboralEmpleado.BAJA,
             DepartamentoId = relationResult.DepartamentoId,
             PuestoId = dto.PuestoId,
-            SucursalId = relationResult.SucursalId
+            SucursalId = relationResult.SucursalId,
+
+            Curp = normalizedCurp,
+            Rfc = normalizedRfc,
+            Nss = normalizedNss,
+            Sexo = dto.Sexo,
+            EstadoCivil = dto.EstadoCivil,
+            Nacionalidad = NormalizeNullable(dto.Nacionalidad),
+
+            DireccionCalle = NormalizeNullable(dto.DireccionCalle),
+            DireccionNumeroExterior = NormalizeNullable(dto.DireccionNumeroExterior),
+            DireccionNumeroInterior = NormalizeNullable(dto.DireccionNumeroInterior),
+            DireccionColonia = NormalizeNullable(dto.DireccionColonia),
+            DireccionCiudad = NormalizeNullable(dto.DireccionCiudad),
+            DireccionEstado = NormalizeNullable(dto.DireccionEstado),
+            DireccionCodigoPostal = normalizedCp,
+
+            ContactoEmergenciaNombre = NormalizeNullable(dto.ContactoEmergenciaNombre),
+            ContactoEmergenciaTelefono = normalizedContactoTelefono,
+            ContactoEmergenciaParentesco = NormalizeNullable(dto.ContactoEmergenciaParentesco)
         };
 
         _db.Empleados.Add(entity);
@@ -315,18 +380,64 @@ public class EmpleadosController : ControllerBase
         if (relationResult.Error is not null)
             return relationResult.Error;
 
+        var validationError = ValidateEmpleadoExtendedFields(
+            dto.Curp,
+            dto.Rfc,
+            dto.Nss,
+            dto.Telefono,
+            dto.DireccionCodigoPostal,
+            dto.ContactoEmergenciaTelefono);
+
+        if (validationError is not null)
+            return validationError;
+
+        var normalizedCurp = NormalizeUpperNullable(dto.Curp);
+        var normalizedRfc = NormalizeUpperNullable(dto.Rfc);
+        var normalizedNss = DigitsOnly(dto.Nss);
+        var normalizedTelefono = DigitsOnly(dto.Telefono);
+        var normalizedCp = DigitsOnly(dto.DireccionCodigoPostal);
+        var normalizedContactoTelefono = DigitsOnly(dto.ContactoEmergenciaTelefono);
+
+        var duplicatedIdentityError = await ValidateDuplicateIdentityAsync(
+            entity.Id,
+            normalizedCurp,
+            normalizedRfc,
+            normalizedNss);
+
+        if (duplicatedIdentityError is not null)
+            return duplicatedIdentityError;
+
         entity.Nombres = dto.Nombres.Trim();
         entity.ApellidoPaterno = dto.ApellidoPaterno.Trim();
-        entity.ApellidoMaterno = string.IsNullOrWhiteSpace(dto.ApellidoMaterno) ? null : dto.ApellidoMaterno.Trim();
+        entity.ApellidoMaterno = NormalizeNullable(dto.ApellidoMaterno);
         entity.FechaNacimiento = dto.FechaNacimiento;
-        entity.Telefono = string.IsNullOrWhiteSpace(dto.Telefono) ? null : dto.Telefono.Trim();
-        entity.Email = string.IsNullOrWhiteSpace(dto.Email) ? null : dto.Email.Trim();
+        entity.Telefono = normalizedTelefono;
+        entity.Email = NormalizeLowerNullable(dto.Email);
         entity.FechaIngreso = dto.FechaIngreso;
         entity.Activo = dto.Activo;
         entity.EstatusLaboralActual = dto.Activo ? EstatusLaboralEmpleado.ACTIVO : EstatusLaboralEmpleado.BAJA;
         entity.DepartamentoId = relationResult.DepartamentoId;
         entity.PuestoId = dto.PuestoId;
         entity.SucursalId = relationResult.SucursalId;
+
+        entity.Curp = normalizedCurp;
+        entity.Rfc = normalizedRfc;
+        entity.Nss = normalizedNss;
+        entity.Sexo = dto.Sexo;
+        entity.EstadoCivil = dto.EstadoCivil;
+        entity.Nacionalidad = NormalizeNullable(dto.Nacionalidad);
+
+        entity.DireccionCalle = NormalizeNullable(dto.DireccionCalle);
+        entity.DireccionNumeroExterior = NormalizeNullable(dto.DireccionNumeroExterior);
+        entity.DireccionNumeroInterior = NormalizeNullable(dto.DireccionNumeroInterior);
+        entity.DireccionColonia = NormalizeNullable(dto.DireccionColonia);
+        entity.DireccionCiudad = NormalizeNullable(dto.DireccionCiudad);
+        entity.DireccionEstado = NormalizeNullable(dto.DireccionEstado);
+        entity.DireccionCodigoPostal = normalizedCp;
+
+        entity.ContactoEmergenciaNombre = NormalizeNullable(dto.ContactoEmergenciaNombre);
+        entity.ContactoEmergenciaTelefono = normalizedContactoTelefono;
+        entity.ContactoEmergenciaParentesco = NormalizeNullable(dto.ContactoEmergenciaParentesco);
 
         await _db.SaveChangesAsync();
 
@@ -368,8 +479,8 @@ public class EmpleadosController : ControllerBase
             TipoMovimiento = TipoMovimientoLaboral.BAJA,
             FechaMovimiento = dto.FechaBaja,
             TipoBaja = dto.TipoBaja,
-            Motivo = string.IsNullOrWhiteSpace(dto.Motivo) ? null : dto.Motivo.Trim(),
-            Comentario = string.IsNullOrWhiteSpace(dto.Comentario) ? null : dto.Comentario.Trim(),
+            Motivo = NormalizeNullable(dto.Motivo),
+            Comentario = NormalizeNullable(dto.Comentario),
             Recontratable = dto.Recontratable,
             UsuarioResponsableId = TryGetCurrentUserId(),
             CreatedAtUtc = DateTime.UtcNow
@@ -448,7 +559,7 @@ public class EmpleadosController : ControllerBase
             TipoMovimiento = TipoMovimientoLaboral.REINGRESO,
             FechaMovimiento = dto.FechaReingreso,
             Motivo = "Reingreso",
-            Comentario = string.IsNullOrWhiteSpace(dto.Comentario) ? null : dto.Comentario.Trim(),
+            Comentario = NormalizeNullable(dto.Comentario),
             Recontratable = null,
             UsuarioResponsableId = TryGetCurrentUserId(),
             CreatedAtUtc = DateTime.UtcNow
@@ -592,6 +703,77 @@ public class EmpleadosController : ControllerBase
         return (departamentoId, sucursalId, null);
     }
 
+    private async Task<IActionResult?> ValidateDuplicateIdentityAsync(
+        int? currentEmpleadoId,
+        string? curp,
+        string? rfc,
+        string? nss)
+    {
+        if (!string.IsNullOrWhiteSpace(curp))
+        {
+            var exists = await _db.Empleados.AsNoTracking()
+                .AnyAsync(x => x.Curp == curp && (!currentEmpleadoId.HasValue || x.Id != currentEmpleadoId.Value));
+
+            if (exists)
+                return Conflict(new { message = "La CURP ya está registrada en otro empleado." });
+        }
+
+        if (!string.IsNullOrWhiteSpace(rfc))
+        {
+            var exists = await _db.Empleados.AsNoTracking()
+                .AnyAsync(x => x.Rfc == rfc && (!currentEmpleadoId.HasValue || x.Id != currentEmpleadoId.Value));
+
+            if (exists)
+                return Conflict(new { message = "El RFC ya está registrado en otro empleado." });
+        }
+
+        if (!string.IsNullOrWhiteSpace(nss))
+        {
+            var exists = await _db.Empleados.AsNoTracking()
+                .AnyAsync(x => x.Nss == nss && (!currentEmpleadoId.HasValue || x.Id != currentEmpleadoId.Value));
+
+            if (exists)
+                return Conflict(new { message = "El NSS ya está registrado en otro empleado." });
+        }
+
+        return null;
+    }
+
+    private IActionResult? ValidateEmpleadoExtendedFields(
+        string? curp,
+        string? rfc,
+        string? nss,
+        string? telefono,
+        string? codigoPostal,
+        string? contactoEmergenciaTelefono)
+    {
+        var normalizedCurp = NormalizeUpperNullable(curp);
+        if (!string.IsNullOrWhiteSpace(normalizedCurp) && !CurpRegex.IsMatch(normalizedCurp))
+            return BadRequest(new { message = "La CURP no tiene un formato válido." });
+
+        var normalizedRfc = NormalizeUpperNullable(rfc);
+        if (!string.IsNullOrWhiteSpace(normalizedRfc) && !RfcRegex.IsMatch(normalizedRfc))
+            return BadRequest(new { message = "El RFC no tiene un formato válido." });
+
+        var normalizedNss = DigitsOnly(nss);
+        if (!string.IsNullOrWhiteSpace(normalizedNss) && !NssRegex.IsMatch(normalizedNss))
+            return BadRequest(new { message = "El NSS debe contener exactamente 11 dígitos." });
+
+        var normalizedTelefono = DigitsOnly(telefono);
+        if (!string.IsNullOrWhiteSpace(normalizedTelefono) && !PhoneRegex.IsMatch(normalizedTelefono))
+            return BadRequest(new { message = "El teléfono debe contener entre 10 y 15 dígitos." });
+
+        var normalizedCp = DigitsOnly(codigoPostal);
+        if (!string.IsNullOrWhiteSpace(normalizedCp) && !CpRegex.IsMatch(normalizedCp))
+            return BadRequest(new { message = "El código postal debe contener exactamente 5 dígitos." });
+
+        var normalizedContactoTelefono = DigitsOnly(contactoEmergenciaTelefono);
+        if (!string.IsNullOrWhiteSpace(normalizedContactoTelefono) && !PhoneRegex.IsMatch(normalizedContactoTelefono))
+            return BadRequest(new { message = "El teléfono de emergencia debe contener entre 10 y 15 dígitos." });
+
+        return null;
+    }
+
     private static EmpleadoDto ToDto(Empleado x)
     {
         return new EmpleadoDto
@@ -616,7 +798,32 @@ public class EmpleadosController : ControllerBase
             PuestoId = x.PuestoId,
             PuestoNombre = x.Puesto != null ? x.Puesto.Nombre : null,
             SucursalId = x.SucursalId,
-            SucursalNombre = x.Sucursal != null ? x.Sucursal.Nombre : null
+            SucursalNombre = x.Sucursal != null ? x.Sucursal.Nombre : null,
+
+            Curp = x.Curp,
+            Rfc = x.Rfc,
+            Nss = x.Nss,
+            Sexo = x.Sexo,
+            EstadoCivil = x.EstadoCivil,
+            Nacionalidad = x.Nacionalidad,
+
+            DireccionCalle = x.DireccionCalle,
+            DireccionNumeroExterior = x.DireccionNumeroExterior,
+            DireccionNumeroInterior = x.DireccionNumeroInterior,
+            DireccionColonia = x.DireccionColonia,
+            DireccionCiudad = x.DireccionCiudad,
+            DireccionEstado = x.DireccionEstado,
+            DireccionCodigoPostal = x.DireccionCodigoPostal,
+
+            ContactoEmergenciaNombre = x.ContactoEmergenciaNombre,
+            ContactoEmergenciaTelefono = x.ContactoEmergenciaTelefono,
+            ContactoEmergenciaParentesco = x.ContactoEmergenciaParentesco,
+
+            FotoRutaRelativa = x.FotoRutaRelativa,
+            FotoNombreOriginal = x.FotoNombreOriginal,
+            FotoMimeType = x.FotoMimeType,
+            FotoTamanoBytes = x.FotoTamanoBytes,
+            FotoUpdatedAtUtc = x.FotoUpdatedAtUtc
         };
     }
 
@@ -646,6 +853,34 @@ public class EmpleadosController : ControllerBase
             User.FindFirstValue("nameid");
 
         return int.TryParse(value, out var userId) ? userId : null;
+    }
+
+    private static string? NormalizeNullable(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
+
+    private static string? NormalizeLowerNullable(string? value)
+    {
+        var normalized = NormalizeNullable(value);
+        return normalized?.ToLowerInvariant();
+    }
+
+    private static string? NormalizeUpperNullable(string? value)
+    {
+        var normalized = NormalizeNullable(value);
+        return normalized?.ToUpperInvariant();
+    }
+
+    private static string? DigitsOnly(string? value)
+    {
+        var normalized = NormalizeNullable(value);
+        if (normalized is null)
+            return null;
+
+        var digits = new string(normalized.Where(char.IsDigit).ToArray());
+        return string.IsNullOrWhiteSpace(digits) ? null : digits;
     }
 
     private static async Task EnsureEmpleadoSequenceAsync(DbConnection conn)

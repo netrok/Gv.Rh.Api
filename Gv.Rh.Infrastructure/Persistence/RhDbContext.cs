@@ -148,7 +148,7 @@ public class RhDbContext : DbContext
                 .HasMaxLength(120);
 
             e.Property(x => x.Telefono)
-                .HasMaxLength(30);
+                .HasMaxLength(15);
 
             e.Property(x => x.Email)
                 .HasMaxLength(160);
@@ -182,6 +182,76 @@ public class RhDbContext : DbContext
 
             e.Property(x => x.Recontratable);
 
+            // Identificación
+            e.Property(x => x.Curp)
+                .HasMaxLength(18);
+
+            e.Property(x => x.Rfc)
+                .HasMaxLength(13);
+
+            e.Property(x => x.Nss)
+                .HasMaxLength(11);
+
+            // Personales
+            e.Property(x => x.Sexo)
+                .HasConversion<string>()
+                .HasMaxLength(30)
+                .IsRequired();
+
+            e.Property(x => x.EstadoCivil)
+                .HasConversion<string>()
+                .HasMaxLength(30)
+                .IsRequired();
+
+            e.Property(x => x.Nacionalidad)
+                .HasMaxLength(80);
+
+            // Domicilio
+            e.Property(x => x.DireccionCalle)
+                .HasMaxLength(150);
+
+            e.Property(x => x.DireccionNumeroExterior)
+                .HasMaxLength(20);
+
+            e.Property(x => x.DireccionNumeroInterior)
+                .HasMaxLength(20);
+
+            e.Property(x => x.DireccionColonia)
+                .HasMaxLength(120);
+
+            e.Property(x => x.DireccionCiudad)
+                .HasMaxLength(120);
+
+            e.Property(x => x.DireccionEstado)
+                .HasMaxLength(120);
+
+            e.Property(x => x.DireccionCodigoPostal)
+                .HasMaxLength(5);
+
+            // Emergencia
+            e.Property(x => x.ContactoEmergenciaNombre)
+                .HasMaxLength(150);
+
+            e.Property(x => x.ContactoEmergenciaTelefono)
+                .HasMaxLength(15);
+
+            e.Property(x => x.ContactoEmergenciaParentesco)
+                .HasMaxLength(60);
+
+            // Foto
+            e.Property(x => x.FotoRutaRelativa)
+                .HasMaxLength(300);
+
+            e.Property(x => x.FotoNombreOriginal)
+                .HasMaxLength(255);
+
+            e.Property(x => x.FotoMimeType)
+                .HasMaxLength(100);
+
+            e.Property(x => x.FotoTamanoBytes);
+
+            e.Property(x => x.FotoUpdatedAtUtc);
+
             e.HasOne(x => x.Departamento)
                 .WithMany()
                 .HasForeignKey(x => x.DepartamentoId)
@@ -197,10 +267,25 @@ public class RhDbContext : DbContext
                 .HasForeignKey(x => x.SucursalId)
                 .OnDelete(DeleteBehavior.Restrict);
 
+            e.HasMany(x => x.Documentos)
+                .WithOne(x => x.Empleado)
+                .HasForeignKey(x => x.EmpleadoId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasMany(x => x.MovimientosLaborales)
+                .WithOne(x => x.Empleado)
+                .HasForeignKey(x => x.EmpleadoId)
+                .OnDelete(DeleteBehavior.Cascade);
+
             e.HasIndex(x => x.NumEmpleado).IsUnique();
+            e.HasIndex(x => x.Email);
+            e.HasIndex(x => x.Curp);
+            e.HasIndex(x => x.Rfc);
+            e.HasIndex(x => x.Nss);
             e.HasIndex(x => x.DepartamentoId);
             e.HasIndex(x => x.PuestoId);
             e.HasIndex(x => x.SucursalId);
+            e.HasIndex(x => x.Activo);
             e.HasIndex(x => x.EstatusLaboralActual);
         });
 
