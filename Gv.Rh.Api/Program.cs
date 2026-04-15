@@ -201,14 +201,27 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-// Seed + cleanup (antes de arrancar)
+// Migraciones + seed + cleanup (antes de arrancar)
 using (var scope = app.Services.CreateScope())
 {
+    var logger = scope.ServiceProvider
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("Startup");
+
     var db = scope.ServiceProvider.GetRequiredService<RhDbContext>();
+
+    logger.LogInformation("Aplicando migraciones pendientes de EF Core...");
+    await db.Database.MigrateAsync();
+    logger.LogInformation("Migraciones EF Core aplicadas correctamente.");
+
+    logger.LogInformation("Ejecutando seeding inicial...");
     await DbSeeder.SeedAsync(db);
+    logger.LogInformation("Seeding completado.");
 
     var tokens = scope.ServiceProvider.GetRequiredService<TokenService>();
     var deleted = await tokens.CleanupExpiredTokensAsync();
+
+    logger.LogInformation("Refresh tokens expirados eliminados: {DeletedCount}", deleted);
     Console.WriteLine($"[Auth] Refresh tokens expirados eliminados: {deleted}");
 }
 
