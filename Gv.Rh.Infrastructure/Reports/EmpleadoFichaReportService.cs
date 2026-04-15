@@ -1,5 +1,6 @@
 ﻿using Gv.Rh.Application.Abstractions.Reports;
 using Gv.Rh.Application.DTOs.Common;
+using Gv.Rh.Domain.Common;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using QuestPDF.Fluent;
@@ -12,6 +13,18 @@ namespace Gv.Rh.Infrastructure.Reports;
 public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
 {
     private readonly RhDbContext _context;
+
+    private static readonly TipoDocumentoEmpleado[] RequiredTipos =
+    [
+        TipoDocumentoEmpleado.Ine,
+        TipoDocumentoEmpleado.Curp,
+        TipoDocumentoEmpleado.Rfc,
+        TipoDocumentoEmpleado.Nss,
+        TipoDocumentoEmpleado.ActaNacimiento,
+        TipoDocumentoEmpleado.ComprobanteDomicilio,
+        TipoDocumentoEmpleado.Contrato,
+        TipoDocumentoEmpleado.CartaPolicia
+    ];
 
     public EmpleadoFichaReportService(RhDbContext context)
     {
@@ -52,6 +65,113 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
         if (empleado is null)
             throw new InvalidOperationException("No se encontró el empleado solicitado.");
 
+        var movimientos = await _context.EmpleadoMovimientosLaborales
+            .AsNoTracking()
+            .Where(x => x.EmpleadoId == empleadoId)
+            .OrderByDescending(x => x.FechaMovimiento)
+            .ThenByDescending(x => x.CreatedAtUtc)
+            .Take(5)
+            .Select(x => new EmpleadoFichaMovimientoViewModel
+            {
+                TipoMovimiento = x.TipoMovimiento.ToString(),
+                FechaMovimiento = x.FechaMovimiento,
+                TipoBaja = x.TipoBaja != null ? x.TipoBaja.ToString() : null,
+                Motivo = x.Motivo,
+                Comentario = x.Comentario
+            })
+            .ToListAsync(cancellationToken);
+
+        var documentos = await _context.EmpleadoDocumentos
+            .AsNoTracking()
+            .Where(x => x.EmpleadoId == empleadoId && x.Activo)
+            .OrderByDescending(x => x.UpdatedAtUtc)
+            .ThenByDescending(x => x.CreatedAtUtc)
+            .ToListAsync(cancellationToken);
+
+        var latestByTipo = documentos
+            .GroupBy(x => x.Tipo)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var warningDate = today.AddDays(30);
+
+        var documentoItems = new List<EmpleadoFichaDocumentoViewModel>();
+        var cargados = 0;
+        var faltantes = 0;
+        var porVencer = 0;
+        var vencidos = 0;
+
+        foreach (var tipo in RequiredTipos)
+        {
+            latestByTipo.TryGetValue(tipo, out var documento);
+
+            if (documento is null)
+            {
+                faltantes++;
+                documentoItems.Add(new EmpleadoFichaDocumentoViewModel
+                {
+                    Tipo = tipo.ToString(),
+                    Estado = "Pendiente",
+                    FechaVencimiento = null
+                });
+                continue;
+            }
+
+            if (!documento.FechaVencimiento.HasValue)
+            {
+                cargados++;
+                documentoItems.Add(new EmpleadoFichaDocumentoViewModel
+                {
+                    Tipo = tipo.ToString(),
+                    Estado = "Cargado",
+                    FechaVencimiento = null
+                });
+                continue;
+            }
+
+            var fechaVencimiento = documento.FechaVencimiento.Value;
+
+            if (fechaVencimiento < today)
+            {
+                vencidos++;
+                documentoItems.Add(new EmpleadoFichaDocumentoViewModel
+                {
+                    Tipo = tipo.ToString(),
+                    Estado = "Vencido",
+                    FechaVencimiento = fechaVencimiento
+                });
+                continue;
+            }
+
+            if (fechaVencimiento <= warningDate)
+            {
+                cargados++;
+                porVencer++;
+                documentoItems.Add(new EmpleadoFichaDocumentoViewModel
+                {
+                    Tipo = tipo.ToString(),
+                    Estado = "Por vencer",
+                    FechaVencimiento = fechaVencimiento
+                });
+                continue;
+            }
+
+            cargados++;
+            documentoItems.Add(new EmpleadoFichaDocumentoViewModel
+            {
+                Tipo = tipo.ToString(),
+                Estado = "Vigente",
+                FechaVencimiento = fechaVencimiento
+            });
+        }
+
+        empleado.Movimientos = movimientos;
+        empleado.Documentos = documentoItems;
+        empleado.DocumentosCargados = cargados;
+        empleado.DocumentosFaltantes = faltantes;
+        empleado.DocumentosPorVencer = porVencer;
+        empleado.DocumentosVencidos = vencidos;
+
         var generatedAtUtc = DateTime.UtcNow;
 
         var pdfBytes = Document.Create(document =>
@@ -70,7 +190,9 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
 
                     column.Item().Element(container => ComposeSummary(container, empleado));
                     column.Item().Element(container => ComposeDatosPersonales(container, empleado));
-                    column.Item().Element(container => ComposeDatosLaborales(container, empleado));
+                    column.Item().Element(container => ComposeSituacionLaboral(container, empleado));
+                    column.Item().Element(container => ComposeHistorialLaboral(container, empleado.Movimientos));
+                    column.Item().Element(container => ComposeSituacionDocumental(container, empleado));
                 });
 
                 page.Footer().Element(container => ComposeFooter(container, generatedAtUtc));
@@ -160,17 +282,17 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
 
             SummaryCard(
                 row.RelativeItem(),
-                "Número de empleado",
-                NullSafe(empleado.NumEmpleado),
-                "Identificador interno",
-                "#1D4ED8");
+                "Puesto",
+                NullSafe(empleado.Puesto),
+                "Posición vigente",
+                "#B45309");
 
             SummaryCard(
                 row.RelativeItem(),
-                "Ingreso",
-                FormatDate(empleado.FechaIngreso),
-                "Fecha de alta",
-                "#0F766E");
+                "Departamento",
+                NullSafe(empleado.Departamento),
+                "Área organizacional",
+                "#1D4ED8");
 
             SummaryCard(
                 row.RelativeItem(),
@@ -181,10 +303,10 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
 
             SummaryCard(
                 row.RelativeItem(),
-                "Puesto",
-                NullSafe(empleado.Puesto),
-                "Posición vigente",
-                "#B45309");
+                "Ingreso",
+                FormatDate(empleado.FechaIngreso),
+                "Fecha de alta",
+                "#0F766E");
         });
     }
 
@@ -199,16 +321,12 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                 row.RelativeItem().Column(left =>
                 {
                     left.Spacing(6);
-                    Field(left, "Nombres", NullSafe(empleado.Nombres));
-                    Field(left, "Apellido paterno", NullSafe(empleado.ApellidoPaterno));
-                    Field(left, "Apellido materno", NullSafe(empleado.ApellidoMaterno));
-                    Field(left, "Nombre completo", GetNombreCompleto(empleado));
+                    Field(left, "Fecha de nacimiento", FormatDateNullable(empleado.FechaNacimiento));
                 });
 
                 row.RelativeItem().Column(right =>
                 {
                     right.Spacing(6);
-                    Field(right, "Fecha de nacimiento", FormatDateNullable(empleado.FechaNacimiento));
                     Field(right, "Teléfono", NullSafe(empleado.Telefono));
                     Field(right, "Correo", NullSafe(empleado.Email));
                 });
@@ -216,9 +334,9 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
         });
     }
 
-    private static void ComposeDatosLaborales(IContainer container, EmpleadoFichaViewModel empleado)
+    private static void ComposeSituacionLaboral(IContainer container, EmpleadoFichaViewModel empleado)
     {
-        SectionCard(container, "Datos laborales", body =>
+        SectionCard(container, "Situación laboral", body =>
         {
             body.Item().Row(row =>
             {
@@ -227,22 +345,149 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                 row.RelativeItem().Column(left =>
                 {
                     left.Spacing(6);
-                    Field(left, "Sucursal", NullSafe(empleado.Sucursal));
-                    Field(left, "Departamento", NullSafe(empleado.Departamento));
-                    Field(left, "Puesto", NullSafe(empleado.Puesto));
-                    Field(left, "Fecha de ingreso", FormatDate(empleado.FechaIngreso));
-                    Field(left, "Estatus laboral", FormatLabel(empleado.EstatusLaboralActual));
+                    Field(left, "Fecha de baja actual", FormatDateNullable(empleado.FechaBajaActual));
+                    Field(left, "Tipo de baja actual", FormatLabelNullable(empleado.TipoBajaActual));
                 });
 
                 row.RelativeItem().Column(right =>
                 {
                     right.Spacing(6);
-                    Field(right, "Activo", empleado.Activo ? "Sí" : "No");
-                    Field(right, "Fecha de baja actual", FormatDateNullable(empleado.FechaBajaActual));
-                    Field(right, "Tipo de baja actual", FormatLabelNullable(empleado.TipoBajaActual));
                     Field(right, "Fecha de reingreso actual", FormatDateNullable(empleado.FechaReingresoActual));
                     Field(right, "Recontratable", FormatBoolNullable(empleado.Recontratable));
                 });
+            });
+        });
+    }
+
+    private static void ComposeHistorialLaboral(
+        IContainer container,
+        IReadOnlyList<EmpleadoFichaMovimientoViewModel> movimientos)
+    {
+        SectionCard(container, "Historial laboral", body =>
+        {
+            if (movimientos.Count == 0)
+            {
+                body.Item()
+                    .Border(1)
+                    .BorderColor("#E5EAF2")
+                    .CornerRadius(6)
+                    .PaddingVertical(6)
+                    .PaddingHorizontal(8)
+                    .Text("Sin movimientos laborales registrados.")
+                    .FontSize(8.5f)
+                    .FontColor("#64748B");
+
+                return;
+            }
+
+            body.Item().Column(list =>
+            {
+                list.Spacing(4);
+
+                foreach (var movimiento in movimientos)
+                {
+                    list.Item()
+                        .Border(1)
+                        .BorderColor("#E5EAF2")
+                        .CornerRadius(6)
+                        .PaddingVertical(6)
+                        .PaddingHorizontal(8)
+                        .Column(card =>
+                        {
+                            card.Spacing(3);
+
+                            card.Item().Row(row =>
+                            {
+                                row.RelativeItem().Text(FormatLabel(movimiento.TipoMovimiento))
+                                    .FontSize(9.2f)
+                                    .SemiBold()
+                                    .FontColor("#0F172A");
+
+                                row.ConstantItem(82).AlignRight().Text(FormatDate(movimiento.FechaMovimiento))
+                                    .FontSize(8.1f)
+                                    .FontColor("#64748B");
+                            });
+
+                            card.Item().Row(row =>
+                            {
+                                row.Spacing(10);
+
+                                row.RelativeItem().Text(text =>
+                                {
+                                    text.Span("Tipo baja: ").SemiBold().FontColor("#64748B");
+                                    text.Span(FormatLabelNullable(movimiento.TipoBaja)).FontColor("#0F172A");
+                                });
+
+                                row.RelativeItem().Text(text =>
+                                {
+                                    text.Span("Motivo: ").SemiBold().FontColor("#64748B");
+                                    text.Span(NullSafe(movimiento.Motivo)).FontColor("#0F172A");
+                                });
+                            });
+
+                            if (!string.IsNullOrWhiteSpace(movimiento.Comentario))
+                            {
+                                card.Item().Text(text =>
+                                {
+                                    text.Span("Comentario: ").SemiBold().FontColor("#64748B");
+                                    text.Span(movimiento.Comentario!.Trim()).FontColor("#0F172A");
+                                });
+                            }
+                        });
+                }
+            });
+        });
+    }
+
+    private static void ComposeSituacionDocumental(
+        IContainer container,
+        EmpleadoFichaViewModel empleado)
+    {
+        SectionCard(container, "Situación documental", body =>
+        {
+            body.Item().Row(row =>
+            {
+                row.Spacing(6);
+
+                MiniStatCard(row.RelativeItem(), "Requeridos", RequiredTipos.Length.ToString(CultureInfo.InvariantCulture), "#1D4ED8");
+                MiniStatCard(row.RelativeItem(), "Cargados", empleado.DocumentosCargados.ToString(CultureInfo.InvariantCulture), "#15803D");
+                MiniStatCard(row.RelativeItem(), "Pendientes", empleado.DocumentosFaltantes.ToString(CultureInfo.InvariantCulture), "#B45309");
+                MiniStatCard(row.RelativeItem(), "Por vencer", empleado.DocumentosPorVencer.ToString(CultureInfo.InvariantCulture), "#7C3AED");
+                MiniStatCard(row.RelativeItem(), "Vencidos", empleado.DocumentosVencidos.ToString(CultureInfo.InvariantCulture), "#B91C1C");
+            });
+
+            body.Item().PaddingTop(4).Column(list =>
+            {
+                list.Spacing(4);
+
+                foreach (var documento in empleado.Documentos)
+                {
+                    list.Item()
+                        .Border(1)
+                        .BorderColor("#E5EAF2")
+                        .CornerRadius(6)
+                        .PaddingVertical(5)
+                        .PaddingHorizontal(8)
+                        .Row(row =>
+                        {
+                            row.RelativeItem().Text(FormatTipoDocumento(documento.Tipo))
+                                .FontSize(8.8f)
+                                .SemiBold()
+                                .FontColor("#0F172A");
+
+                            row.ConstantItem(88).AlignCenter().Text(documento.Estado)
+                                .FontSize(8f)
+                                .SemiBold()
+                                .FontColor(GetEstadoDocumentoColor(documento.Estado));
+
+                            row.ConstantItem(88).AlignRight().Text(
+                                documento.FechaVencimiento.HasValue
+                                    ? FormatDate(documento.FechaVencimiento.Value)
+                                    : "—")
+                                .FontSize(8f)
+                                .FontColor("#64748B");
+                        });
+                }
             });
         });
     }
@@ -254,10 +499,10 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
             .Border(1)
             .BorderColor("#D7DFEA")
             .CornerRadius(8)
-            .Padding(12)
+            .Padding(10)
             .Column(column =>
             {
-                column.Spacing(8);
+                column.Spacing(6);
 
                 column.Item().Text(title)
                     .FontSize(11)
@@ -324,6 +569,29 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                 column.Item().Text(subtitle)
                     .FontSize(7.8f)
                     .FontColor("#94A3B8");
+            });
+    }
+
+    private static void MiniStatCard(IContainer container, string title, string value, string color)
+    {
+        container
+            .Border(1)
+            .BorderColor("#E5EAF2")
+            .CornerRadius(6)
+            .PaddingVertical(6)
+            .PaddingHorizontal(8)
+            .Column(column =>
+            {
+                column.Spacing(1);
+
+                column.Item().Text(title)
+                    .FontSize(7.1f)
+                    .FontColor("#64748B");
+
+                column.Item().Text(value)
+                    .FontSize(10f)
+                    .SemiBold()
+                    .FontColor(color);
             });
     }
 
@@ -427,6 +695,35 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
         return string.IsNullOrWhiteSpace(value) ? "—" : FormatLabel(value);
     }
 
+    private static string FormatTipoDocumento(string? value)
+    {
+        return value switch
+        {
+            "Ine" => "INE",
+            "Curp" => "CURP",
+            "Rfc" => "RFC",
+            "Nss" => "NSS",
+            "ActaNacimiento" => "Acta de nacimiento",
+            "ComprobanteDomicilio" => "Comprobante de domicilio",
+            "Contrato" => "Contrato",
+            "CartaPolicia" => "Carta policía",
+            _ => FormatLabel(value)
+        };
+    }
+
+    private static string GetEstadoDocumentoColor(string estado)
+    {
+        return estado switch
+        {
+            "Vigente" => "#15803D",
+            "Cargado" => "#1D4ED8",
+            "Por vencer" => "#7C3AED",
+            "Vencido" => "#B91C1C",
+            "Pendiente" => "#B45309",
+            _ => "#475569"
+        };
+    }
+
     private static string BuildFileName(string numEmpleado)
     {
         var safeNumEmpleado = string.IsNullOrWhiteSpace(numEmpleado) ? "sin_numero" : numEmpleado.Trim();
@@ -453,5 +750,28 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
         public string? TipoBajaActual { get; set; }
         public DateOnly? FechaReingresoActual { get; set; }
         public bool? Recontratable { get; set; }
+
+        public List<EmpleadoFichaMovimientoViewModel> Movimientos { get; set; } = [];
+        public List<EmpleadoFichaDocumentoViewModel> Documentos { get; set; } = [];
+        public int DocumentosCargados { get; set; }
+        public int DocumentosFaltantes { get; set; }
+        public int DocumentosPorVencer { get; set; }
+        public int DocumentosVencidos { get; set; }
+    }
+
+    private sealed class EmpleadoFichaMovimientoViewModel
+    {
+        public string TipoMovimiento { get; set; } = string.Empty;
+        public DateOnly FechaMovimiento { get; set; }
+        public string? TipoBaja { get; set; }
+        public string? Motivo { get; set; }
+        public string? Comentario { get; set; }
+    }
+
+    private sealed class EmpleadoFichaDocumentoViewModel
+    {
+        public string Tipo { get; set; } = string.Empty;
+        public string Estado { get; set; } = string.Empty;
+        public DateOnly? FechaVencimiento { get; set; }
     }
 }
