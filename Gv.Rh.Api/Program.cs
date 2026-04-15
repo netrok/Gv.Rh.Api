@@ -45,7 +45,7 @@ builder.Services.AddSwaggerGen(c =>
         Scheme = "bearer",
         BearerFormat = "JWT",
         In = ParameterLocation.Header,
-        Description = "Escribe: Bearer {tu_token}"
+        Description = "Pega únicamente el access token. No pegues JSON ni refresh token."
     });
 
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
@@ -77,7 +77,6 @@ static bool IsAllowedFrontendOrigin(string? origin)
         !string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
         return false;
 
-    // Puertos típicos del front local
     if (uri.Port != 5173 && uri.Port != 3000 && uri.Port != 4173)
         return false;
 
@@ -91,15 +90,12 @@ static bool IsAllowedFrontendOrigin(string? origin)
 
     var bytes = ip.GetAddressBytes();
 
-    // 10.0.0.0/8
     if (bytes[0] == 10)
         return true;
 
-    // 192.168.0.0/16
     if (bytes[0] == 192 && bytes[1] == 168)
         return true;
 
-    // 172.16.0.0/12
     if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
         return true;
 
@@ -120,26 +116,39 @@ builder.Services.AddCors(opt =>
 var jwt = builder.Configuration.GetSection("Jwt");
 
 var key = jwt["Key"] ?? throw new InvalidOperationException(
-    "Falta Jwt:Key. Configúralo con User Secrets (DEV) o variables de entorno (PROD). No lo pongas en el repo."
+    "Falta Jwt:Key. Configúralo con User Secrets (DEV) o variables de entorno (PROD)."
 );
 
 var issuer = jwt["Issuer"] ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
 var audience = jwt["Audience"] ?? throw new InvalidOperationException("Falta Jwt:Audience.");
 
+if (key.Length < 32)
+{
+    throw new InvalidOperationException("Jwt:Key debe tener al menos 32 caracteres.");
+}
+
+var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key));
+
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(opt =>
     {
+        opt.RequireHttpsMetadata = false;
+        opt.SaveToken = true;
+
         opt.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateIssuerSigningKey = true,
-            ValidateLifetime = true,
             ValidIssuer = issuer,
+
+            ValidateAudience = true,
             ValidAudience = audience,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)),
-            ClockSkew = TimeSpan.FromSeconds(30)
+
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = signingKey,
+
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.Zero
         };
     });
 
@@ -162,10 +171,6 @@ builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteSer
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>
 {
     opt.UseNpgsql(builder.Configuration.GetConnectionString("RhDb"));
-
-    // Si instalaste EFCore.NamingConventions:
-    // opt.UseSnakeCaseNamingConvention();
-
     opt.AddInterceptors(sp.GetRequiredService<AuditSaveChangesInterceptor>());
 });
 

@@ -25,25 +25,7 @@ public class TokenService
 
     public string CreateAccessToken(AppUser user)
     {
-        var jwt = _config.GetSection("Jwt");
-
-        var key = jwt["Key"] ?? throw new InvalidOperationException(
-            "Falta Jwt:Key. Configúralo con User Secrets (DEV) o variables de entorno (PROD)."
-        );
-
-        var keyBytes = Encoding.UTF8.GetBytes(key);
-        if (keyBytes.Length < 16)
-        {
-            throw new InvalidOperationException(
-                "Jwt:Key debe tener al menos 16 bytes (128 bits). Recomendado: 32 bytes o más."
-            );
-        }
-
-        var issuer = jwt["Issuer"] ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
-        var audience = jwt["Audience"] ?? throw new InvalidOperationException("Falta Jwt:Audience.");
-
-        var signingKey = new SymmetricSecurityKey(keyBytes);
-        var creds = new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256);
+        var (key, issuer, audience, signingKey) = GetJwtConfig();
 
         var normalizedRole = UserRoles.Normalize(user.Role);
         var displayName = string.IsNullOrWhiteSpace(user.FullName)
@@ -61,8 +43,11 @@ public class TokenService
             new("role", normalizedRole)
         };
 
+        var jwt = _config.GetSection("Jwt");
         var accessMinutes = int.TryParse(jwt["AccessMinutes"], out var m) ? m : 15;
         var expires = DateTime.UtcNow.AddMinutes(accessMinutes);
+
+        var creds = new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256);
 
         var token = new JwtSecurityToken(
             issuer: issuer,
@@ -222,29 +207,22 @@ public class TokenService
 
     public ClaimsPrincipal ReadPrincipalFromExpiredToken(string token)
     {
-        var jwt = _config.GetSection("Jwt");
-
-        var key = jwt["Key"] ?? throw new InvalidOperationException("Falta Jwt:Key.");
-        var issuer = jwt["Issuer"] ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
-        var audience = jwt["Audience"] ?? throw new InvalidOperationException("Falta Jwt:Audience.");
-
-        var keyBytes = Encoding.UTF8.GetBytes(key);
-        if (keyBytes.Length < 16)
-        {
-            throw new InvalidOperationException(
-                "Jwt:Key debe tener al menos 16 bytes (128 bits)."
-            );
-        }
+        var (_, issuer, audience, signingKey) = GetJwtConfig();
 
         var tokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateIssuerSigningKey = true,
-            ValidateLifetime = false,
             ValidIssuer = issuer,
+
+            ValidateAudience = true,
             ValidAudience = audience,
-            IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
+
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = signingKey,
+
+            ValidateLifetime = false,
+            ClockSkew = TimeSpan.Zero,
+
             NameClaimType = ClaimTypes.Name,
             RoleClaimType = ClaimTypes.Role
         };
@@ -259,6 +237,26 @@ public class TokenService
         }
 
         return principal;
+    }
+
+    private (string key, string issuer, string audience, SymmetricSecurityKey signingKey) GetJwtConfig()
+    {
+        var jwt = _config.GetSection("Jwt");
+
+        var key = jwt["Key"] ?? throw new InvalidOperationException(
+            "Falta Jwt:Key. Configúralo con User Secrets (DEV) o variables de entorno (PROD)."
+        );
+
+        var issuer = jwt["Issuer"] ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
+        var audience = jwt["Audience"] ?? throw new InvalidOperationException("Falta Jwt:Audience.");
+
+        if (key.Length < 32)
+        {
+            throw new InvalidOperationException("Jwt:Key debe tener al menos 32 caracteres.");
+        }
+
+        var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key));
+        return (key, issuer, audience, signingKey);
     }
 
     private (string plain, string hash, DateTime expUtc) CreateRefreshTokenMaterial()
