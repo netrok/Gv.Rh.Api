@@ -19,12 +19,6 @@ public class EmpleadoDto
     public DateOnly FechaIngreso { get; set; }
     public bool Activo { get; set; }
 
-    public EstatusLaboralEmpleado EstatusLaboralActual { get; set; }
-    public DateOnly? FechaBajaActual { get; set; }
-    public TipoBajaEmpleado? TipoBajaActual { get; set; }
-    public DateOnly? FechaReingresoActual { get; set; }
-    public bool? Recontratable { get; set; }
-
     public int? DepartamentoId { get; set; }
     public string? DepartamentoNombre { get; set; }
 
@@ -53,15 +47,30 @@ public class EmpleadoDto
     public string? DireccionEstado { get; set; }
     public string? DireccionCodigoPostal { get; set; }
 
+    // Fiscales
+    public string? CodigoPostalFiscal { get; set; }
+    public string? EntidadFiscal { get; set; }
+
     // Emergencia
     public string? ContactoEmergenciaNombre { get; set; }
     public string? ContactoEmergenciaTelefono { get; set; }
     public string? ContactoEmergenciaParentesco { get; set; }
 
+    // Laboral
+    public EstatusLaboralEmpleado EstatusLaboralActual { get; set; }
+    public DateOnly? FechaBajaActual { get; set; }
+    public TipoBajaEmpleado? TipoBajaActual { get; set; }
+    public DateOnly? FechaReingresoActual { get; set; }
+    public bool Recontratable { get; set; }
+
     // Foto
-    public string? FotoRutaRelativa { get; set; }
+    public string? FotoUrl { get; set; }
+    public bool TieneFoto { get; set; }
     public string? FotoNombreOriginal { get; set; }
     public string? FotoMimeType { get; set; }
     public long? FotoTamanoBytes { get; set; }
-    public DateTime? FotoUpdatedAtUtc { get; set; }
+
+    // Auditoría / metadata
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime? UpdatedAtUtc { get; set; }
 }

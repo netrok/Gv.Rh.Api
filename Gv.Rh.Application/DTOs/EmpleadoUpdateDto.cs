@@ -29,7 +29,7 @@ public class EmpleadoUpdateDto
     [Required]
     public DateOnly FechaIngreso { get; set; }
 
-    public bool Activo { get; set; }
+    public bool Activo { get; set; } = true;
 
     public int? DepartamentoId { get; set; }
     public int? PuestoId { get; set; }
@@ -87,6 +87,16 @@ public class EmpleadoUpdateDto
         ErrorMessage = "El código postal debe contener exactamente 5 dígitos.")]
     public string? DireccionCodigoPostal { get; set; }
 
+    // Fiscales
+    [StringLength(5)]
+    [RegularExpression(
+        @"^\d{5}$",
+        ErrorMessage = "El código postal fiscal debe contener exactamente 5 dígitos.")]
+    public string? CodigoPostalFiscal { get; set; }
+
+    [StringLength(120)]
+    public string? EntidadFiscal { get; set; }
+
     // Emergencia
     [StringLength(150)]
     public string? ContactoEmergenciaNombre { get; set; }
@@ -100,3 +110,4 @@ public class EmpleadoUpdateDto
     [StringLength(60)]
     public string? ContactoEmergenciaParentesco { get; set; }
 }
+

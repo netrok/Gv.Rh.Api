@@ -8,7 +8,7 @@ public class Empleado
     public int Id { get; set; }
 
     [Required]
-    [MaxLength(20)]
+    [MaxLength(30)]
     public string NumEmpleado { get; set; } = string.Empty;
 
     [Required]
@@ -43,7 +43,7 @@ public class Empleado
 
     public DateOnly? FechaReingresoActual { get; set; }
 
-    public bool? Recontratable { get; set; }
+    public bool Recontratable { get; set; } = true;
 
     public int? DepartamentoId { get; set; }
     public Departamento? Departamento { get; set; }
@@ -94,6 +94,13 @@ public class Empleado
     [MaxLength(5)]
     public string? DireccionCodigoPostal { get; set; }
 
+    // Fiscales
+    [MaxLength(5)]
+    public string? CodigoPostalFiscal { get; set; }
+
+    [MaxLength(120)]
+    public string? EntidadFiscal { get; set; }
+
     // Emergencia
     [MaxLength(150)]
     public string? ContactoEmergenciaNombre { get; set; }
@@ -105,11 +112,14 @@ public class Empleado
     public string? ContactoEmergenciaParentesco { get; set; }
 
     // Foto
-    [MaxLength(300)]
-    public string? FotoRutaRelativa { get; set; }
-
-    [MaxLength(255)]
+    [MaxLength(260)]
     public string? FotoNombreOriginal { get; set; }
+
+    [MaxLength(260)]
+    public string? FotoNombreGuardado { get; set; }
+
+    [MaxLength(500)]
+    public string? FotoRutaRelativa { get; set; }
 
     [MaxLength(100)]
     public string? FotoMimeType { get; set; }
@@ -117,6 +127,10 @@ public class Empleado
     public long? FotoTamanoBytes { get; set; }
 
     public DateTime? FotoUpdatedAtUtc { get; set; }
+
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+
+    public DateTime? UpdatedAtUtc { get; set; }
 
     public ICollection<EmpleadoDocumento> Documentos { get; set; } = new List<EmpleadoDocumento>();
 

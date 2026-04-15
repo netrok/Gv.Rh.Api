@@ -1,15 +1,17 @@
-﻿using System.Data;
-using System.Data.Common;
-using System.Security.Claims;
-using System.Text.RegularExpressions;
-using Gv.Rh.Application.Abstractions.Reports;
+﻿using Gv.Rh.Application.Abstractions.Reports;
 using Gv.Rh.Application.DTOs.Empleados;
 using Gv.Rh.Domain.Common;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Data;
+using System.Data.Common;
+using System.Security.Claims;
+using System.Text.RegularExpressions;
 
 namespace Gv.Rh.Api.Controllers;
 
@@ -19,6 +21,7 @@ namespace Gv.Rh.Api.Controllers;
 public class EmpleadosController : ControllerBase
 {
     private readonly RhDbContext _db;
+    private readonly IWebHostEnvironment _env;
     private readonly IEmpleadosReportService _empleadosReportService;
     private readonly IEmpleadoFichaReportService _empleadoFichaReportService;
 
@@ -39,10 +42,12 @@ public class EmpleadosController : ControllerBase
 
     public EmpleadosController(
         RhDbContext db,
+        IWebHostEnvironment env,
         IEmpleadosReportService empleadosReportService,
         IEmpleadoFichaReportService empleadoFichaReportService)
     {
         _db = db;
+        _env = env;
         _empleadosReportService = empleadosReportService;
         _empleadoFichaReportService = empleadoFichaReportService;
     }
@@ -108,20 +113,27 @@ public class EmpleadosController : ControllerBase
             "nombre" or "nombres" => asc ? query.OrderBy(x => x.Nombres) : query.OrderByDescending(x => x.Nombres),
             "apellido" or "apellidopaterno" => asc ? query.OrderBy(x => x.ApellidoPaterno) : query.OrderByDescending(x => x.ApellidoPaterno),
             "fechaingreso" => asc ? query.OrderBy(x => x.FechaIngreso) : query.OrderByDescending(x => x.FechaIngreso),
-            "departamento" => asc ? query.OrderBy(x => x.Departamento!.Nombre) : query.OrderByDescending(x => x.Departamento!.Nombre),
-            "puesto" => asc ? query.OrderBy(x => x.Puesto!.Nombre) : query.OrderByDescending(x => x.Puesto!.Nombre),
-            "sucursal" => asc ? query.OrderBy(x => x.Sucursal!.Nombre) : query.OrderByDescending(x => x.Sucursal!.Nombre),
+            "departamento" => asc
+                ? query.OrderBy(x => x.Departamento != null ? x.Departamento.Nombre : string.Empty)
+                : query.OrderByDescending(x => x.Departamento != null ? x.Departamento.Nombre : string.Empty),
+            "puesto" => asc
+                ? query.OrderBy(x => x.Puesto != null ? x.Puesto.Nombre : string.Empty)
+                : query.OrderByDescending(x => x.Puesto != null ? x.Puesto.Nombre : string.Empty),
+            "sucursal" => asc
+                ? query.OrderBy(x => x.Sucursal != null ? x.Sucursal.Nombre : string.Empty)
+                : query.OrderByDescending(x => x.Sucursal != null ? x.Sucursal.Nombre : string.Empty),
             "activo" => asc ? query.OrderBy(x => x.Activo) : query.OrderByDescending(x => x.Activo),
             _ => asc ? query.OrderBy(x => x.Id) : query.OrderByDescending(x => x.Id),
         };
 
         var total = await query.CountAsync();
 
-        var items = await query
+        var entities = await query
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Select(x => ToDto(x))
             .ToListAsync();
+
+        var items = entities.Select(MapEmpleadoDto).ToList();
 
         return Ok(new
         {
@@ -136,16 +148,10 @@ public class EmpleadosController : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id)
     {
-        var emp = await _db.Empleados
-            .AsNoTracking()
-            .Include(x => x.Departamento)
-            .Include(x => x.Puesto)
-            .Include(x => x.Sucursal)
-            .Where(x => x.Id == id)
-            .Select(x => ToDto(x))
-            .FirstOrDefaultAsync();
-
-        return emp is null ? NotFound() : Ok(emp);
+        var dto = await LoadEmpleadoDtoAsync(id);
+        return dto is null
+            ? NotFound(new { message = "Empleado no encontrado." })
+            : Ok(dto);
     }
 
     [HttpGet("export/xlsx")]
@@ -255,6 +261,7 @@ public class EmpleadosController : ControllerBase
             return Conflict(new { message = "Ese usuario ya está ligado a otro empleado." });
 
         user.EmpleadoId = id;
+        user.UpdatedAtUtc = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
         return Ok(new
@@ -294,16 +301,28 @@ public class EmpleadosController : ControllerBase
             dto.Nss,
             dto.Telefono,
             dto.DireccionCodigoPostal,
+            dto.CodigoPostalFiscal,
             dto.ContactoEmergenciaTelefono);
 
         if (validationError is not null)
             return validationError;
+
+        var numEmpleado = NormalizeUpperNullable(dto.NumEmpleado);
+        if (string.IsNullOrWhiteSpace(numEmpleado))
+            return BadRequest(new { message = "El número de empleado es obligatorio." });
+
+        var existeNumEmpleado = await _db.Empleados.AsNoTracking()
+            .AnyAsync(x => x.NumEmpleado == numEmpleado);
+
+        if (existeNumEmpleado)
+            return Conflict(new { message = "Ya existe un empleado con ese número." });
 
         var normalizedCurp = NormalizeUpperNullable(dto.Curp);
         var normalizedRfc = NormalizeUpperNullable(dto.Rfc);
         var normalizedNss = DigitsOnly(dto.Nss);
         var normalizedTelefono = DigitsOnly(dto.Telefono);
         var normalizedCp = DigitsOnly(dto.DireccionCodigoPostal);
+        var normalizedCpFiscal = DigitsOnly(dto.CodigoPostalFiscal);
         var normalizedContactoTelefono = DigitsOnly(dto.ContactoEmergenciaTelefono);
 
         var duplicatedIdentityError = await ValidateDuplicateIdentityAsync(
@@ -314,9 +333,6 @@ public class EmpleadosController : ControllerBase
 
         if (duplicatedIdentityError is not null)
             return duplicatedIdentityError;
-
-        var next = await NextEmpleadoSequenceAsync();
-        var numEmpleado = $"EMP-{next:000000}";
 
         var entity = new Empleado
         {
@@ -333,14 +349,12 @@ public class EmpleadosController : ControllerBase
             DepartamentoId = relationResult.DepartamentoId,
             PuestoId = dto.PuestoId,
             SucursalId = relationResult.SucursalId,
-
             Curp = normalizedCurp,
             Rfc = normalizedRfc,
             Nss = normalizedNss,
             Sexo = dto.Sexo,
             EstadoCivil = dto.EstadoCivil,
             Nacionalidad = NormalizeNullable(dto.Nacionalidad),
-
             DireccionCalle = NormalizeNullable(dto.DireccionCalle),
             DireccionNumeroExterior = NormalizeNullable(dto.DireccionNumeroExterior),
             DireccionNumeroInterior = NormalizeNullable(dto.DireccionNumeroInterior),
@@ -348,24 +362,19 @@ public class EmpleadosController : ControllerBase
             DireccionCiudad = NormalizeNullable(dto.DireccionCiudad),
             DireccionEstado = NormalizeNullable(dto.DireccionEstado),
             DireccionCodigoPostal = normalizedCp,
-
+            CodigoPostalFiscal = normalizedCpFiscal,
+            EntidadFiscal = NormalizeNullable(dto.EntidadFiscal),
             ContactoEmergenciaNombre = NormalizeNullable(dto.ContactoEmergenciaNombre),
             ContactoEmergenciaTelefono = normalizedContactoTelefono,
-            ContactoEmergenciaParentesco = NormalizeNullable(dto.ContactoEmergenciaParentesco)
+            ContactoEmergenciaParentesco = NormalizeNullable(dto.ContactoEmergenciaParentesco),
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow
         };
 
         _db.Empleados.Add(entity);
         await _db.SaveChangesAsync();
 
-        var created = await _db.Empleados
-            .AsNoTracking()
-            .Include(x => x.Departamento)
-            .Include(x => x.Puesto)
-            .Include(x => x.Sucursal)
-            .Where(x => x.Id == entity.Id)
-            .Select(x => ToDto(x))
-            .FirstAsync();
-
+        var created = await LoadEmpleadoDtoAsync(entity.Id);
         return CreatedAtAction(nameof(GetById), new { id = entity.Id }, created);
     }
 
@@ -374,7 +383,7 @@ public class EmpleadosController : ControllerBase
     {
         var entity = await _db.Empleados.FirstOrDefaultAsync(x => x.Id == id);
         if (entity is null)
-            return NotFound();
+            return NotFound(new { message = "Empleado no encontrado." });
 
         var relationResult = await ResolveRelationsAsync(dto.DepartamentoId, dto.PuestoId, dto.SucursalId);
         if (relationResult.Error is not null)
@@ -386,6 +395,7 @@ public class EmpleadosController : ControllerBase
             dto.Nss,
             dto.Telefono,
             dto.DireccionCodigoPostal,
+            dto.CodigoPostalFiscal,
             dto.ContactoEmergenciaTelefono);
 
         if (validationError is not null)
@@ -396,6 +406,7 @@ public class EmpleadosController : ControllerBase
         var normalizedNss = DigitsOnly(dto.Nss);
         var normalizedTelefono = DigitsOnly(dto.Telefono);
         var normalizedCp = DigitsOnly(dto.DireccionCodigoPostal);
+        var normalizedCpFiscal = DigitsOnly(dto.CodigoPostalFiscal);
         var normalizedContactoTelefono = DigitsOnly(dto.ContactoEmergenciaTelefono);
 
         var duplicatedIdentityError = await ValidateDuplicateIdentityAsync(
@@ -419,14 +430,12 @@ public class EmpleadosController : ControllerBase
         entity.DepartamentoId = relationResult.DepartamentoId;
         entity.PuestoId = dto.PuestoId;
         entity.SucursalId = relationResult.SucursalId;
-
         entity.Curp = normalizedCurp;
         entity.Rfc = normalizedRfc;
         entity.Nss = normalizedNss;
         entity.Sexo = dto.Sexo;
         entity.EstadoCivil = dto.EstadoCivil;
         entity.Nacionalidad = NormalizeNullable(dto.Nacionalidad);
-
         entity.DireccionCalle = NormalizeNullable(dto.DireccionCalle);
         entity.DireccionNumeroExterior = NormalizeNullable(dto.DireccionNumeroExterior);
         entity.DireccionNumeroInterior = NormalizeNullable(dto.DireccionNumeroInterior);
@@ -434,23 +443,156 @@ public class EmpleadosController : ControllerBase
         entity.DireccionCiudad = NormalizeNullable(dto.DireccionCiudad);
         entity.DireccionEstado = NormalizeNullable(dto.DireccionEstado);
         entity.DireccionCodigoPostal = normalizedCp;
-
+        entity.CodigoPostalFiscal = normalizedCpFiscal;
+        entity.EntidadFiscal = NormalizeNullable(dto.EntidadFiscal);
         entity.ContactoEmergenciaNombre = NormalizeNullable(dto.ContactoEmergenciaNombre);
         entity.ContactoEmergenciaTelefono = normalizedContactoTelefono;
         entity.ContactoEmergenciaParentesco = NormalizeNullable(dto.ContactoEmergenciaParentesco);
+        entity.UpdatedAtUtc = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
 
-        var updated = await _db.Empleados
-            .AsNoTracking()
-            .Include(x => x.Departamento)
-            .Include(x => x.Puesto)
-            .Include(x => x.Sucursal)
-            .Where(x => x.Id == entity.Id)
-            .Select(x => ToDto(x))
-            .FirstAsync();
-
+        var updated = await LoadEmpleadoDtoAsync(entity.Id);
         return Ok(updated);
+    }
+
+    [HttpPut("{id:int}/numero-empleado")]
+    [Authorize(Roles = "ADMIN")]
+    public async Task<IActionResult> CambiarNumeroEmpleado(int id, [FromBody] CambiarNumeroEmpleadoDto dto)
+    {
+        var empleado = await _db.Empleados.FirstOrDefaultAsync(x => x.Id == id);
+        if (empleado is null)
+            return NotFound(new { message = "Empleado no encontrado." });
+
+        var nuevoNumero = NormalizeUpperNullable(dto.NumEmpleadoNuevo);
+        if (string.IsNullOrWhiteSpace(nuevoNumero))
+            return BadRequest(new { message = "El nuevo número de empleado es obligatorio." });
+
+        if (string.Equals(empleado.NumEmpleado, nuevoNumero, StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "El nuevo número de empleado es igual al actual." });
+
+        var repetido = await _db.Empleados.AsNoTracking()
+            .AnyAsync(x => x.Id != id && x.NumEmpleado == nuevoNumero);
+
+        if (repetido)
+            return Conflict(new { message = "Ya existe otro empleado con ese número." });
+
+        empleado.NumEmpleado = nuevoNumero;
+        empleado.UpdatedAtUtc = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            empleado.Id,
+            empleado.NumEmpleado,
+            Motivo = NormalizeNullable(dto.Motivo)
+        });
+    }
+
+    [HttpGet("siguiente-numero-sugerido")]
+    public async Task<IActionResult> GetSiguienteNumeroSugerido()
+    {
+        var nextValue = await PeekNextEmpleadoSequenceAsync();
+
+        return Ok(new
+        {
+            numEmpleadoSugerido = nextValue.ToString("D6")
+        });
+    }
+
+    [HttpPost("{id:int}/foto")]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> SubirFoto(int id, [FromForm] IFormFile file)
+    {
+        const long maxBytes = 2 * 1024 * 1024;
+        var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".webp" };
+        var allowedMimeTypes = new[] { "image/jpeg", "image/png", "image/webp" };
+
+        var empleado = await _db.Empleados.FindAsync(id);
+        if (empleado is null)
+            return NotFound(new { message = "Empleado no encontrado." });
+
+        if (file is null || file.Length == 0)
+            return BadRequest(new { message = "Debes adjuntar una imagen." });
+
+        if (file.Length > maxBytes)
+            return BadRequest(new { message = "La foto no debe exceder 2 MB." });
+
+        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (!allowedExtensions.Contains(extension))
+            return BadRequest(new { message = "Formato no permitido. Usa JPG, PNG o WEBP." });
+
+        if (!allowedMimeTypes.Contains(file.ContentType))
+            return BadRequest(new { message = "Tipo MIME no permitido." });
+
+        var webRoot = EnsureWebRootPath();
+        var root = Path.Combine(webRoot, "storage", "empleados", id.ToString());
+        Directory.CreateDirectory(root);
+
+        if (!string.IsNullOrWhiteSpace(empleado.FotoRutaRelativa))
+        {
+            var oldPhysicalPath = Path.Combine(webRoot, empleado.FotoRutaRelativa.Replace('/', Path.DirectorySeparatorChar));
+            if (System.IO.File.Exists(oldPhysicalPath))
+                System.IO.File.Delete(oldPhysicalPath);
+        }
+
+        var fileName = $"perfil{extension}";
+        var physicalPath = Path.Combine(root, fileName);
+
+        await using (var stream = System.IO.File.Create(physicalPath))
+        {
+            await file.CopyToAsync(stream);
+        }
+
+        empleado.FotoNombreOriginal = file.FileName;
+        empleado.FotoNombreGuardado = fileName;
+        empleado.FotoRutaRelativa = Path.Combine("storage", "empleados", id.ToString(), fileName).Replace("\\", "/");
+        empleado.FotoMimeType = file.ContentType;
+        empleado.FotoTamanoBytes = file.Length;
+        empleado.FotoUpdatedAtUtc = DateTime.UtcNow;
+        empleado.UpdatedAtUtc = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            empleado.Id,
+            empleado.NumEmpleado,
+            FotoUrl = BuildFotoUrl(empleado.FotoRutaRelativa),
+            empleado.FotoNombreOriginal,
+            empleado.FotoMimeType,
+            empleado.FotoTamanoBytes,
+            empleado.FotoUpdatedAtUtc
+        });
+    }
+
+    [HttpDelete("{id:int}/foto")]
+    public async Task<IActionResult> EliminarFoto(int id)
+    {
+        var empleado = await _db.Empleados.FindAsync(id);
+        if (empleado is null)
+            return NotFound(new { message = "Empleado no encontrado." });
+
+        if (!string.IsNullOrWhiteSpace(empleado.FotoRutaRelativa))
+        {
+            var webRoot = EnsureWebRootPath();
+            var physicalPath = Path.Combine(webRoot, empleado.FotoRutaRelativa.Replace('/', Path.DirectorySeparatorChar));
+            if (System.IO.File.Exists(physicalPath))
+                System.IO.File.Delete(physicalPath);
+        }
+
+        empleado.FotoNombreOriginal = null;
+        empleado.FotoNombreGuardado = null;
+        empleado.FotoRutaRelativa = null;
+        empleado.FotoMimeType = null;
+        empleado.FotoTamanoBytes = null;
+        empleado.FotoUpdatedAtUtc = DateTime.UtcNow;
+        empleado.UpdatedAtUtc = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+
+        return NoContent();
     }
 
     [HttpPost("{id:int}/baja")]
@@ -470,8 +612,9 @@ public class EmpleadosController : ControllerBase
         empleado.EstatusLaboralActual = EstatusLaboralEmpleado.BAJA;
         empleado.FechaBajaActual = dto.FechaBaja;
         empleado.TipoBajaActual = dto.TipoBaja;
-        empleado.Recontratable = dto.Recontratable;
+        empleado.Recontratable = dto.Recontratable ?? false;
         empleado.FechaReingresoActual = null;
+        empleado.UpdatedAtUtc = DateTime.UtcNow;
 
         var movimiento = new EmpleadoMovimientoLaboral
         {
@@ -548,10 +691,11 @@ public class EmpleadosController : ControllerBase
         empleado.FechaReingresoActual = dto.FechaReingreso;
         empleado.FechaBajaActual = null;
         empleado.TipoBajaActual = null;
-        empleado.Recontratable = null;
+        empleado.Recontratable = true;
         empleado.DepartamentoId = relationResult.DepartamentoId;
         empleado.PuestoId = puestoId;
         empleado.SucursalId = relationResult.SucursalId;
+        empleado.UpdatedAtUtc = DateTime.UtcNow;
 
         var movimiento = new EmpleadoMovimientoLaboral
         {
@@ -560,7 +704,7 @@ public class EmpleadosController : ControllerBase
             FechaMovimiento = dto.FechaReingreso,
             Motivo = "Reingreso",
             Comentario = NormalizeNullable(dto.Comentario),
-            Recontratable = null,
+            Recontratable = true,
             UsuarioResponsableId = TryGetCurrentUserId(),
             CreatedAtUtc = DateTime.UtcNow
         };
@@ -625,13 +769,14 @@ public class EmpleadosController : ControllerBase
     {
         var entity = await _db.Empleados.FirstOrDefaultAsync(x => x.Id == id);
         if (entity is null)
-            return NotFound();
+            return NotFound(new { message = "Empleado no encontrado." });
 
         if (!entity.Activo)
             return NoContent();
 
         entity.Activo = false;
         entity.EstatusLaboralActual = EstatusLaboralEmpleado.BAJA;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
         return NoContent();
@@ -642,13 +787,14 @@ public class EmpleadosController : ControllerBase
     {
         var entity = await _db.Empleados.FirstOrDefaultAsync(x => x.Id == id);
         if (entity is null)
-            return NotFound();
+            return NotFound(new { message = "Empleado no encontrado." });
 
         if (entity.Activo)
             return NoContent();
 
         entity.Activo = true;
         entity.EstatusLaboralActual = EstatusLaboralEmpleado.ACTIVO;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
         return NoContent();
@@ -745,6 +891,7 @@ public class EmpleadosController : ControllerBase
         string? nss,
         string? telefono,
         string? codigoPostal,
+        string? codigoPostalFiscal,
         string? contactoEmergenciaTelefono)
     {
         var normalizedCurp = NormalizeUpperNullable(curp);
@@ -767,6 +914,10 @@ public class EmpleadosController : ControllerBase
         if (!string.IsNullOrWhiteSpace(normalizedCp) && !CpRegex.IsMatch(normalizedCp))
             return BadRequest(new { message = "El código postal debe contener exactamente 5 dígitos." });
 
+        var normalizedCpFiscal = DigitsOnly(codigoPostalFiscal);
+        if (!string.IsNullOrWhiteSpace(normalizedCpFiscal) && !CpRegex.IsMatch(normalizedCpFiscal))
+            return BadRequest(new { message = "El código postal fiscal debe contener exactamente 5 dígitos." });
+
         var normalizedContactoTelefono = DigitsOnly(contactoEmergenciaTelefono);
         if (!string.IsNullOrWhiteSpace(normalizedContactoTelefono) && !PhoneRegex.IsMatch(normalizedContactoTelefono))
             return BadRequest(new { message = "El teléfono de emergencia debe contener entre 10 y 15 dígitos." });
@@ -774,56 +925,68 @@ public class EmpleadosController : ControllerBase
         return null;
     }
 
-    private static EmpleadoDto ToDto(Empleado x)
+    private async Task<EmpleadoDto?> LoadEmpleadoDtoAsync(int id)
+    {
+        var empleado = await _db.Empleados
+            .AsNoTracking()
+            .Include(x => x.Departamento)
+            .Include(x => x.Puesto)
+            .Include(x => x.Sucursal)
+            .FirstOrDefaultAsync(x => x.Id == id);
+
+        return empleado is null ? null : MapEmpleadoDto(empleado);
+    }
+
+    private EmpleadoDto MapEmpleadoDto(Empleado empleado)
     {
         return new EmpleadoDto
         {
-            Id = x.Id,
-            NumEmpleado = x.NumEmpleado,
-            Nombres = x.Nombres,
-            ApellidoPaterno = x.ApellidoPaterno,
-            ApellidoMaterno = x.ApellidoMaterno,
-            FechaNacimiento = x.FechaNacimiento,
-            Telefono = x.Telefono,
-            Email = x.Email,
-            FechaIngreso = x.FechaIngreso,
-            Activo = x.Activo,
-            EstatusLaboralActual = x.EstatusLaboralActual,
-            FechaBajaActual = x.FechaBajaActual,
-            TipoBajaActual = x.TipoBajaActual,
-            FechaReingresoActual = x.FechaReingresoActual,
-            Recontratable = x.Recontratable,
-            DepartamentoId = x.DepartamentoId,
-            DepartamentoNombre = x.Departamento != null ? x.Departamento.Nombre : null,
-            PuestoId = x.PuestoId,
-            PuestoNombre = x.Puesto != null ? x.Puesto.Nombre : null,
-            SucursalId = x.SucursalId,
-            SucursalNombre = x.Sucursal != null ? x.Sucursal.Nombre : null,
-
-            Curp = x.Curp,
-            Rfc = x.Rfc,
-            Nss = x.Nss,
-            Sexo = x.Sexo,
-            EstadoCivil = x.EstadoCivil,
-            Nacionalidad = x.Nacionalidad,
-
-            DireccionCalle = x.DireccionCalle,
-            DireccionNumeroExterior = x.DireccionNumeroExterior,
-            DireccionNumeroInterior = x.DireccionNumeroInterior,
-            DireccionColonia = x.DireccionColonia,
-            DireccionCiudad = x.DireccionCiudad,
-            DireccionEstado = x.DireccionEstado,
-            DireccionCodigoPostal = x.DireccionCodigoPostal,
-
-            ContactoEmergenciaNombre = x.ContactoEmergenciaNombre,
-            ContactoEmergenciaTelefono = x.ContactoEmergenciaTelefono,
-            ContactoEmergenciaParentesco = x.ContactoEmergenciaParentesco,
-
-            FotoRutaRelativa = x.FotoRutaRelativa,
-            FotoNombreOriginal = x.FotoNombreOriginal,
-            FotoMimeType = x.FotoMimeType,
-            FotoTamanoBytes = x.FotoTamanoBytes,
-            FotoUpdatedAtUtc = x.FotoUpdatedAtUtc
+            Id = empleado.Id,
+            NumEmpleado = empleado.NumEmpleado,
+            Nombres = empleado.Nombres,
+            ApellidoPaterno = empleado.ApellidoPaterno,
+            ApellidoMaterno = empleado.ApellidoMaterno,
+            FechaNacimiento = empleado.FechaNacimiento,
+            Telefono = empleado.Telefono,
+            Email = empleado.Email,
+            FechaIngreso = empleado.FechaIngreso,
+            Activo = empleado.Activo,
+            DepartamentoId = empleado.DepartamentoId,
+            DepartamentoNombre = empleado.Departamento?.Nombre,
+            PuestoId = empleado.PuestoId,
+            PuestoNombre = empleado.Puesto?.Nombre,
+            SucursalId = empleado.SucursalId,
+            SucursalNombre = empleado.Sucursal?.Nombre,
+            Curp = empleado.Curp,
+            Rfc = empleado.Rfc,
+            Nss = empleado.Nss,
+            Sexo = empleado.Sexo,
+            EstadoCivil = empleado.EstadoCivil,
+            Nacionalidad = empleado.Nacionalidad,
+            DireccionCalle = empleado.DireccionCalle,
+            DireccionNumeroExterior = empleado.DireccionNumeroExterior,
+            DireccionNumeroInterior = empleado.DireccionNumeroInterior,
+            DireccionColonia = empleado.DireccionColonia,
+            DireccionCiudad = empleado.DireccionCiudad,
+            DireccionEstado = empleado.DireccionEstado,
+            DireccionCodigoPostal = empleado.DireccionCodigoPostal,
+            CodigoPostalFiscal = empleado.CodigoPostalFiscal,
+            EntidadFiscal = empleado.EntidadFiscal,
+            ContactoEmergenciaNombre = empleado.ContactoEmergenciaNombre,
+            ContactoEmergenciaTelefono = empleado.ContactoEmergenciaTelefono,
+            ContactoEmergenciaParentesco = empleado.ContactoEmergenciaParentesco,
+            EstatusLaboralActual = empleado.EstatusLaboralActual,
+            FechaBajaActual = empleado.FechaBajaActual,
+            TipoBajaActual = empleado.TipoBajaActual,
+            FechaReingresoActual = empleado.FechaReingresoActual,
+            Recontratable = empleado.Recontratable,
+            FotoUrl = BuildFotoUrl(empleado.FotoRutaRelativa),
+            TieneFoto = !string.IsNullOrWhiteSpace(empleado.FotoRutaRelativa),
+            FotoNombreOriginal = empleado.FotoNombreOriginal,
+            FotoMimeType = empleado.FotoMimeType,
+            FotoTamanoBytes = empleado.FotoTamanoBytes,
+            CreatedAtUtc = empleado.CreatedAtUtc,
+            UpdatedAtUtc = empleado.UpdatedAtUtc
         };
     }
 
@@ -883,6 +1046,26 @@ public class EmpleadosController : ControllerBase
         return string.IsNullOrWhiteSpace(digits) ? null : digits;
     }
 
+    private static string? BuildFotoUrl(string? relativePath)
+    {
+        return string.IsNullOrWhiteSpace(relativePath)
+            ? null
+            : "/" + relativePath.Replace("\\", "/");
+    }
+
+    private string EnsureWebRootPath()
+    {
+        var webRoot = _env.WebRootPath;
+
+        if (string.IsNullOrWhiteSpace(webRoot))
+        {
+            webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+            Directory.CreateDirectory(webRoot);
+        }
+
+        return webRoot;
+    }
+
     private static async Task EnsureEmpleadoSequenceAsync(DbConnection conn)
     {
         await using var cmd = conn.CreateCommand();
@@ -927,7 +1110,7 @@ END $$;
         await cmd.ExecuteNonQueryAsync();
     }
 
-    private async Task<long> NextEmpleadoSequenceAsync()
+    private async Task<long> PeekNextEmpleadoSequenceAsync()
     {
         var conn = _db.Database.GetDbConnection();
         var shouldClose = conn.State != ConnectionState.Open;
@@ -940,11 +1123,17 @@ END $$;
             await EnsureEmpleadoSequenceAsync(conn);
 
             await using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT nextval('public.empleados_num_seq')";
+            cmd.CommandText = @"
+SELECT CASE
+    WHEN is_called THEN last_value + 1
+    ELSE last_value
+END
+FROM public.empleados_num_seq;";
+
             var result = await cmd.ExecuteScalarAsync();
 
             if (result is null || result == DBNull.Value)
-                throw new InvalidOperationException("No se pudo obtener el siguiente valor de la secuencia public.empleados_num_seq.");
+                throw new InvalidOperationException("No se pudo obtener el siguiente número sugerido de empleado.");
 
             return Convert.ToInt64(result);
         }
@@ -955,3 +1144,6 @@ END $$;
         }
     }
 }
+
+
+

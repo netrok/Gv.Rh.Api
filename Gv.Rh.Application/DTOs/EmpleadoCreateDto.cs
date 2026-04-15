@@ -6,6 +6,10 @@ namespace Gv.Rh.Application.DTOs.Empleados;
 public class EmpleadoCreateDto
 {
     [Required]
+    [MaxLength(30)]
+    public string NumEmpleado { get; set; } = string.Empty;
+
+    [Required]
     [StringLength(120, MinimumLength = 2)]
     public string Nombres { get; set; } = string.Empty;
 
@@ -86,6 +90,16 @@ public class EmpleadoCreateDto
         @"^\d{5}$",
         ErrorMessage = "El código postal debe contener exactamente 5 dígitos.")]
     public string? DireccionCodigoPostal { get; set; }
+
+    // Fiscales
+    [StringLength(5)]
+    [RegularExpression(
+        @"^\d{5}$",
+        ErrorMessage = "El código postal fiscal debe contener exactamente 5 dígitos.")]
+    public string? CodigoPostalFiscal { get; set; }
+
+    [StringLength(120)]
+    public string? EntidadFiscal { get; set; }
 
     // Emergencia
     [StringLength(150)]
