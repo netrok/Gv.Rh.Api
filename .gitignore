@@ -10,3 +10,5 @@ appsettings.*.Development.json
 /Gv.Rh.Api/wwwroot/
 
 artifacts/
+
+backups/
