@@ -1,5 +1,7 @@
 ﻿using Gv.Rh.Application.Abstractions.Reports;
 using Gv.Rh.Application.DTOs.Empleados;
+using Gv.Rh.Application.DTOs.Empleados.Import;
+using Gv.Rh.Application.Interfaces;
 using Gv.Rh.Domain.Common;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
@@ -8,8 +10,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Data;
-using System.Data.Common;
+using System.IO;
 using System.Security.Claims;
 using System.Text.RegularExpressions;
 
@@ -24,6 +25,8 @@ public class EmpleadosController : ControllerBase
     private readonly IWebHostEnvironment _env;
     private readonly IEmpleadosReportService _empleadosReportService;
     private readonly IEmpleadoFichaReportService _empleadoFichaReportService;
+    private readonly IEmpleadoNumberService _empleadoNumberService;
+    private readonly IEmpleadoImportService _empleadoImportService;
 
     private static readonly Regex CurpRegex =
         new(@"^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$", RegexOptions.Compiled);
@@ -40,16 +43,22 @@ public class EmpleadosController : ControllerBase
     private static readonly Regex PhoneRegex =
         new(@"^\d{10,15}$", RegexOptions.Compiled);
 
+    private const long MaxImportFileBytes = 10 * 1024 * 1024; // 10 MB
+
     public EmpleadosController(
         RhDbContext db,
         IWebHostEnvironment env,
         IEmpleadosReportService empleadosReportService,
-        IEmpleadoFichaReportService empleadoFichaReportService)
+        IEmpleadoFichaReportService empleadoFichaReportService,
+        IEmpleadoNumberService empleadoNumberService,
+        IEmpleadoImportService empleadoImportService)
     {
         _db = db;
         _env = env;
         _empleadosReportService = empleadosReportService;
         _empleadoFichaReportService = empleadoFichaReportService;
+        _empleadoNumberService = empleadoNumberService;
+        _empleadoImportService = empleadoImportService;
     }
 
     [HttpGet]
@@ -181,6 +190,66 @@ public class EmpleadosController : ControllerBase
         return File(report.Content, report.ContentType, report.FileName);
     }
 
+    [HttpGet("import/template")]
+    [Authorize(Roles = "ADMIN,RRHH")]
+    public async Task<IActionResult> DownloadImportTemplate(CancellationToken cancellationToken)
+    {
+        var content = await _empleadoImportService.BuildTemplateAsync(cancellationToken);
+
+        return File(
+            content,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "empleados_import_template.xlsx");
+    }
+
+    [HttpPost("import/validate")]
+    [Authorize(Roles = "ADMIN,RRHH")]
+    [Consumes("multipart/form-data")]
+    public async Task<ActionResult<EmpleadoImportValidateResultDto>> ValidateImport(
+        [FromForm] IFormFile file,
+        CancellationToken cancellationToken)
+    {
+        var fileError = ValidateImportFile(file);
+        if (fileError is not null)
+            return fileError;
+
+        await using var stream = file.OpenReadStream();
+
+        try
+        {
+            var result = await _empleadoImportService.ValidateAsync(stream, cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidDataException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpPost("import")]
+    [Authorize(Roles = "ADMIN,RRHH")]
+    [Consumes("multipart/form-data")]
+    public async Task<ActionResult<EmpleadoImportExecuteResultDto>> Import(
+        [FromForm] IFormFile file,
+        CancellationToken cancellationToken)
+    {
+        var fileError = ValidateImportFile(file);
+        if (fileError is not null)
+            return fileError;
+
+        await using var stream = file.OpenReadStream();
+
+        try
+        {
+            var result = await _empleadoImportService.ImportAsync(stream, cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidDataException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
     [Authorize(Roles = "ADMIN")]
     [HttpPost("{id:int}/create-account")]
     public async Task<IActionResult> CreateAccount(int id, [FromBody] CreateAccountForEmpleadoDto dto)
@@ -307,16 +376,6 @@ public class EmpleadosController : ControllerBase
         if (validationError is not null)
             return validationError;
 
-        var numEmpleado = NormalizeUpperNullable(dto.NumEmpleado);
-        if (string.IsNullOrWhiteSpace(numEmpleado))
-            return BadRequest(new { message = "El número de empleado es obligatorio." });
-
-        var existeNumEmpleado = await _db.Empleados.AsNoTracking()
-            .AnyAsync(x => x.NumEmpleado == numEmpleado);
-
-        if (existeNumEmpleado)
-            return Conflict(new { message = "Ya existe un empleado con ese número." });
-
         var normalizedCurp = NormalizeUpperNullable(dto.Curp);
         var normalizedRfc = NormalizeUpperNullable(dto.Rfc);
         var normalizedNss = DigitsOnly(dto.Nss);
@@ -334,9 +393,24 @@ public class EmpleadosController : ControllerBase
         if (duplicatedIdentityError is not null)
             return duplicatedIdentityError;
 
+        var numEmpleado = NormalizeUpperNullable(dto.NumEmpleado);
+
+        if (!string.IsNullOrWhiteSpace(numEmpleado))
+        {
+            var existeNumEmpleado = await _db.Empleados.AsNoTracking()
+                .AnyAsync(x => x.NumEmpleado == numEmpleado);
+
+            if (existeNumEmpleado)
+                return Conflict(new { message = "Ya existe un empleado con ese número." });
+        }
+        else
+        {
+            numEmpleado = await _empleadoNumberService.GenerateNextAsync();
+        }
+
         var entity = new Empleado
         {
-            NumEmpleado = numEmpleado,
+            NumEmpleado = numEmpleado!,
             Nombres = dto.Nombres.Trim(),
             ApellidoPaterno = dto.ApellidoPaterno.Trim(),
             ApellidoMaterno = NormalizeNullable(dto.ApellidoMaterno),
@@ -491,13 +565,13 @@ public class EmpleadosController : ControllerBase
     }
 
     [HttpGet("siguiente-numero-sugerido")]
-    public async Task<IActionResult> GetSiguienteNumeroSugerido()
+    public async Task<IActionResult> GetSiguienteNumeroSugerido(CancellationToken cancellationToken)
     {
-        var nextValue = await PeekNextEmpleadoSequenceAsync();
+        var nextValue = await _empleadoNumberService.PeekNextAsync(cancellationToken);
 
         return Ok(new
         {
-            numEmpleadoSugerido = nextValue.ToString("D6")
+            numEmpleadoSugerido = nextValue
         });
     }
 
@@ -1018,6 +1092,24 @@ public class EmpleadosController : ControllerBase
         return int.TryParse(value, out var userId) ? userId : null;
     }
 
+    private BadRequestObjectResult? ValidateImportFile(IFormFile? file)
+    {
+        if (file is null)
+            return BadRequest(new { message = "Debes adjuntar un archivo Excel." });
+
+        if (file.Length <= 0)
+            return BadRequest(new { message = "El archivo Excel está vacío." });
+
+        if (file.Length > MaxImportFileBytes)
+            return BadRequest(new { message = "El archivo Excel no debe exceder 10 MB." });
+
+        var extension = Path.GetExtension(file.FileName)?.Trim().ToLowerInvariant();
+        if (extension != ".xlsx")
+            return BadRequest(new { message = "Formato no permitido. Debes subir un archivo .xlsx." });
+
+        return null;
+    }
+
     private static string? NormalizeNullable(string? value)
     {
         var trimmed = value?.Trim();
@@ -1065,85 +1157,4 @@ public class EmpleadosController : ControllerBase
 
         return webRoot;
     }
-
-    private static async Task EnsureEmpleadoSequenceAsync(DbConnection conn)
-    {
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-DO $$
-DECLARE
-    v_max_num bigint;
-    v_last_value bigint;
-    v_is_called boolean;
-    v_next_value bigint;
-BEGIN
-    CREATE SEQUENCE IF NOT EXISTS public.empleados_num_seq
-        AS bigint
-        START WITH 1
-        INCREMENT BY 1
-        NO MINVALUE
-        NO MAXVALUE
-        NO CYCLE;
-
-    SELECT COALESCE(
-        MAX(NULLIF(regexp_replace(""NumEmpleado"", '\D', '', 'g'), '')::bigint),
-        0
-    )
-    INTO v_max_num
-    FROM empleados;
-
-    SELECT last_value, is_called
-    INTO v_last_value, v_is_called
-    FROM public.empleados_num_seq;
-
-    v_next_value := GREATEST(
-        v_max_num + 1,
-        CASE
-            WHEN v_is_called THEN v_last_value + 1
-            ELSE v_last_value
-        END
-    );
-
-    PERFORM setval('public.empleados_num_seq', v_next_value, false);
-END $$;
-";
-        await cmd.ExecuteNonQueryAsync();
-    }
-
-    private async Task<long> PeekNextEmpleadoSequenceAsync()
-    {
-        var conn = _db.Database.GetDbConnection();
-        var shouldClose = conn.State != ConnectionState.Open;
-
-        if (shouldClose)
-            await conn.OpenAsync();
-
-        try
-        {
-            await EnsureEmpleadoSequenceAsync(conn);
-
-            await using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"
-SELECT CASE
-    WHEN is_called THEN last_value + 1
-    ELSE last_value
-END
-FROM public.empleados_num_seq;";
-
-            var result = await cmd.ExecuteScalarAsync();
-
-            if (result is null || result == DBNull.Value)
-                throw new InvalidOperationException("No se pudo obtener el siguiente número sugerido de empleado.");
-
-            return Convert.ToInt64(result);
-        }
-        finally
-        {
-            if (shouldClose)
-                await conn.CloseAsync();
-        }
-    }
 }
-
-
-

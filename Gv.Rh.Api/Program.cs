@@ -1,9 +1,11 @@
 using Gv.Rh.Api.Middlewares;
 using Gv.Rh.Api.Services;
 using Gv.Rh.Application.Abstractions.Reports;
+using Gv.Rh.Application.Interfaces;
 using Gv.Rh.Application.Interfaces.Reclutamiento;
 using Gv.Rh.Infrastructure.Persistence;
 using Gv.Rh.Infrastructure.Reports;
+using Gv.Rh.Infrastructure.Services;
 using Gv.Rh.Infrastructure.Services.Reclutamiento;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -166,6 +168,8 @@ builder.Services.AddScoped<IEmpleadosReportService, EmpleadosReportService>();
 builder.Services.AddScoped<IEmpleadoFichaReportService, EmpleadoFichaReportService>();
 builder.Services.AddScoped<IEmpleadoDocumentoStorageService, EmpleadoDocumentoStorageService>();
 builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteService>();
+builder.Services.AddScoped<IEmpleadoNumberService, EmpleadoNumberService>();
+builder.Services.AddScoped<IEmpleadoImportService, EmpleadoImportService>();
 
 // DbContext (PostgreSQL) + interceptor
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>
