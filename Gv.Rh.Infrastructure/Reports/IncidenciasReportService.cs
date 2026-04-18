@@ -5,6 +5,9 @@ using Gv.Rh.Application.DTOs.Incidencias;
 using Gv.Rh.Domain.Common.Enums;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
+using Gv.Rh.Infrastructure.Reports.Common;
+using Gv.Rh.Infrastructure.Reports.Excel;
+using Gv.Rh.Infrastructure.Reports.Pdf;
 using Microsoft.EntityFrameworkCore;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
@@ -27,11 +30,14 @@ public sealed class IncidenciasReportService : IIncidenciasReportService
         CancellationToken cancellationToken)
     {
         var rows = await GetIncidenciasExportRowsAsync(query, cancellationToken);
+        var filterLabels = await ResolveFilterLabelsAsync(query, cancellationToken);
+        var generatedAtUtc = DateTime.UtcNow;
 
         using var workbook = new XLWorkbook();
+        CorporateExcelStyles.ApplyWorkbookDefaults(workbook);
 
-        BuildIncidenciasSheet(workbook, rows, query);
-        BuildResumenSheet(workbook, rows, query);
+        BuildResumenSheet(workbook, rows, filterLabels, generatedAtUtc);
+        BuildDetalleSheet(workbook, rows, filterLabels, generatedAtUtc);
 
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
@@ -49,46 +55,59 @@ public sealed class IncidenciasReportService : IIncidenciasReportService
         CancellationToken cancellationToken)
     {
         var rows = await GetIncidenciasExportRowsAsync(query, cancellationToken);
+        var filterLabels = await ResolveFilterLabelsAsync(query, cancellationToken);
+        var generatedAtUtc = DateTime.UtcNow;
+
+        var total = rows.Count;
+        var pendientes = rows.Count(x => NormalizeKey(x.Estatus) == nameof(EstatusIncidencia.PENDIENTE));
+        var aprobadas = rows.Count(x => NormalizeKey(x.Estatus) == nameof(EstatusIncidencia.APROBADA));
+        var rechazadas = rows.Count(x => NormalizeKey(x.Estatus) == nameof(EstatusIncidencia.RECHAZADA));
+        var empleadosUnicos = rows
+            .Select(x => x.EmpleadoId)
+            .Where(x => x > 0)
+            .Distinct()
+            .Count();
 
         var pdfBytes = Document.Create(document =>
         {
             document.Page(page =>
             {
-                page.Size(PageSizes.A4);
-                page.Margin(1.5f, Unit.Centimetre);
-                page.DefaultTextStyle(x => x.FontSize(8));
+                page.Size(PageSizes.A4.Landscape());
+                page.Margin(1.2f, Unit.Centimetre);
+                page.DefaultTextStyle(x => x.FontSize(9).FontColor(CorporateReportPalette.Ink900));
 
-                page.Header().Column(column =>
-                {
-                    column.Spacing(4);
-
-                    column.Item()
-                        .Text("Reporte de incidencias")
-                        .SemiBold()
-                        .FontSize(16);
-
-                    column.Item()
-                        .Text($"Generado UTC: {DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)}");
-                });
+                page.Header().Element(container =>
+                    CorporatePdfBlocks.ComposeReportHeader(
+                        container,
+                        "Reporte de incidencias",
+                        "Resumen ejecutivo y detalle operativo",
+                        generatedAtUtc));
 
                 page.Content().Column(column =>
                 {
                     column.Spacing(10);
 
-                    column.Item().Element(container => ComposeFilters(container, query));
-                    column.Item().Element(container => ComposeSummary(container, rows));
-                    column.Item().Element(container => ComposeDetailTable(container, rows));
+                    column.Item().Element(container =>
+                        CorporatePdfBlocks.ComposeFiltersPanel(
+                            container,
+                            "Filtros aplicados",
+                            BuildFilterItems(filterLabels)));
+
+                    column.Item().Element(container =>
+                        CorporatePdfBlocks.ComposeKpiRow(
+                            container,
+                            ("Total de incidencias", total.ToString(CultureInfo.InvariantCulture), "Registros visibles en el reporte", CorporateReportPalette.KpiPrimary),
+                            ("Pendientes", pendientes.ToString(CultureInfo.InvariantCulture), "Requieren atención", CorporateReportPalette.KpiWarning),
+                            ("Aprobadas", aprobadas.ToString(CultureInfo.InvariantCulture), "Resolución favorable", CorporateReportPalette.KpiSuccess),
+                            ("Rechazadas", rechazadas.ToString(CultureInfo.InvariantCulture), "Resolución no favorable", CorporateReportPalette.Danger),
+                            ("Empleados únicos", empleadosUnicos.ToString(CultureInfo.InvariantCulture), "Personal involucrado", CorporateReportPalette.KpiTeal)));
+
+                    column.Item().Element(container => ComposeDistributionSection(container, rows));
+                    column.Item().Element(container => ComposeDetailSection(container, rows));
                 });
 
-                page.Footer()
-                    .AlignCenter()
-                    .Text(text =>
-                    {
-                        text.Span("Página ");
-                        text.CurrentPageNumber();
-                        text.Span(" de ");
-                        text.TotalPages();
-                    });
+                page.Footer().Element(container =>
+                    CorporatePdfBlocks.ComposeReportFooter(container, generatedAtUtc));
             });
         }).GeneratePdf();
 
@@ -162,12 +181,10 @@ public sealed class IncidenciasReportService : IIncidenciasReportService
             Id = x.Id,
             EmpleadoId = x.EmpleadoId,
             NumEmpleado = x.NumEmpleado,
-            Empleado = string.Join(" ", new[]
-            {
+            Empleado = CorporateReportFormatters.CombineFullName(
                 x.Nombres,
                 x.ApellidoPaterno,
-                x.ApellidoMaterno
-            }.Where(s => !string.IsNullOrWhiteSpace(s))),
+                x.ApellidoMaterno),
             Sucursal = x.Sucursal,
             Tipo = x.Tipo.ToString(),
             Estatus = x.Estatus.ToString(),
@@ -178,284 +195,453 @@ public sealed class IncidenciasReportService : IIncidenciasReportService
         }).ToList();
     }
 
-    private static void BuildIncidenciasSheet(
+    private async Task<IncidenciasReportFilterLabels> ResolveFilterLabelsAsync(
+        IncidenciaQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var labels = new IncidenciasReportFilterLabels
+        {
+            Empleado = "(todos)",
+            Sucursal = "(todas)",
+            Tipo = query.Tipo.HasValue
+                ? CorporateReportFormatters.FormatLabel(query.Tipo.Value.ToString())
+                : "(todos)",
+            Estatus = query.Estatus.HasValue
+                ? CorporateReportFormatters.FormatLabel(query.Estatus.Value.ToString())
+                : "(todos)",
+            FechaDesde = CorporateReportFormatters.FormatDateNullable(query.FechaDesde, fallback: "(sin límite)"),
+            FechaHasta = CorporateReportFormatters.FormatDateNullable(query.FechaHasta, fallback: "(sin límite)"),
+            Periodo = CorporateReportFormatters.FormatDateRange(query.FechaDesde, query.FechaHasta),
+            SoloPendientes = CorporateReportFormatters.FormatBool(query.SoloPendientes)
+        };
+
+        if (query.EmpleadoId.HasValue)
+        {
+            var empleado = await _context.Empleados
+                .AsNoTracking()
+                .Where(x => x.Id == query.EmpleadoId.Value)
+                .Select(x => new
+                {
+                    x.NumEmpleado,
+                    x.Nombres,
+                    x.ApellidoPaterno,
+                    x.ApellidoMaterno
+                })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            labels.Empleado = empleado is null
+                ? $"#{query.EmpleadoId.Value}"
+                : $"{CorporateReportFormatters.NullSafe(empleado.NumEmpleado)} · {CorporateReportFormatters.CombineFullName(empleado.Nombres, empleado.ApellidoPaterno, empleado.ApellidoMaterno)}";
+        }
+
+        if (query.SucursalId.HasValue)
+        {
+            labels.Sucursal = await _context.Sucursales
+                .AsNoTracking()
+                .Where(x => x.Id == query.SucursalId.Value)
+                .Select(x => x.Nombre)
+                .FirstOrDefaultAsync(cancellationToken) ?? $"#{query.SucursalId.Value}";
+        }
+
+        return labels;
+    }
+
+    private static IReadOnlyList<(string Label, string Value)> BuildFilterItems(IncidenciasReportFilterLabels labels)
+    {
+        return
+        [
+            ("Empleado", labels.Empleado),
+            ("Sucursal", labels.Sucursal),
+            ("Tipo", labels.Tipo),
+            ("Estatus", labels.Estatus),
+            ("Periodo", labels.Periodo),
+            ("Solo pendientes", labels.SoloPendientes)
+        ];
+    }
+
+    private static void BuildResumenSheet(
         XLWorkbook workbook,
         IReadOnlyList<IncidenciaExportRowDto> rows,
-        IncidenciaQueryDto query)
+        IncidenciasReportFilterLabels filterLabels,
+        DateTime generatedAtUtc)
+    {
+        var ws = workbook.Worksheets.Add("Resumen");
+
+        CorporateExcelStyles.WriteReportHeader(
+            ws,
+            "Reporte de incidencias",
+            "Resumen ejecutivo",
+            generatedAtUtc,
+            startColumn: 1,
+            endColumn: 10,
+            startRow: 1);
+
+        var nextRow = CorporateExcelStyles.WriteFiltersBlock(
+            ws,
+            startRow: 5,
+            filters: BuildFilterItems(filterLabels));
+
+        nextRow += 1;
+
+        var total = rows.Count;
+        var pendientes = rows.Count(x => NormalizeKey(x.Estatus) == nameof(EstatusIncidencia.PENDIENTE));
+        var aprobadas = rows.Count(x => NormalizeKey(x.Estatus) == nameof(EstatusIncidencia.APROBADA));
+        var rechazadas = rows.Count(x => NormalizeKey(x.Estatus) == nameof(EstatusIncidencia.RECHAZADA));
+        var empleadosUnicos = rows
+            .Select(x => x.EmpleadoId)
+            .Where(x => x > 0)
+            .Distinct()
+            .Count();
+
+        nextRow = CorporateExcelStyles.WriteKpiCards(
+            ws,
+            nextRow,
+            new (string Title, string Value, string AccentColor)[]
+            {
+                ("Total de incidencias", total.ToString(CultureInfo.InvariantCulture), CorporateReportPalette.KpiPrimary),
+                ("Pendientes", pendientes.ToString(CultureInfo.InvariantCulture), CorporateReportPalette.KpiWarning),
+                ("Aprobadas", aprobadas.ToString(CultureInfo.InvariantCulture), CorporateReportPalette.KpiSuccess),
+                ("Rechazadas", rechazadas.ToString(CultureInfo.InvariantCulture), CorporateReportPalette.Danger),
+                ("Empleados únicos", empleadosUnicos.ToString(CultureInfo.InvariantCulture), CorporateReportPalette.KpiTeal)
+            });
+
+        nextRow += 2;
+
+        WriteSummaryTable(
+            ws,
+            startRow: nextRow,
+            startColumn: 1,
+            sectionTitle: "Por estatus",
+            header1: "Estatus",
+            header2: "Cantidad",
+            rows: rows
+                .GroupBy(x => CorporateReportFormatters.FormatLabel(x.Estatus))
+                .OrderBy(x => x.Key)
+                .Select(x => (x.Key, x.Count()))
+                .ToList());
+
+        WriteSummaryTable(
+            ws,
+            startRow: nextRow,
+            startColumn: 4,
+            sectionTitle: "Por tipo",
+            header1: "Tipo",
+            header2: "Cantidad",
+            rows: rows
+                .GroupBy(x => CorporateReportFormatters.FormatLabel(x.Tipo))
+                .OrderBy(x => x.Key)
+                .Select(x => (x.Key, x.Count()))
+                .ToList());
+
+        WriteSummaryTable(
+            ws,
+            startRow: nextRow,
+            startColumn: 7,
+            sectionTitle: "Por sucursal",
+            header1: "Sucursal",
+            header2: "Cantidad",
+            rows: rows
+                .GroupBy(x => CorporateReportFormatters.NullSafe(x.Sucursal, "(sin sucursal)"))
+                .OrderBy(x => x.Key)
+                .Select(x => (x.Key, x.Count()))
+                .ToList());
+
+        CorporateExcelStyles.SetColumnWidths(ws, 22, 18, 4, 22, 18, 4, 24, 18, 4, 16);
+    }
+
+    private static void BuildDetalleSheet(
+        XLWorkbook workbook,
+        IReadOnlyList<IncidenciaExportRowDto> rows,
+        IncidenciasReportFilterLabels filterLabels,
+        DateTime generatedAtUtc)
     {
         var ws = workbook.Worksheets.Add("Incidencias");
 
-        ws.Cell(1, 1).Value = "Reporte de incidencias";
-        ws.Cell(2, 1).Value = "Generado UTC";
-        ws.Cell(2, 2).Value = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        CorporateExcelStyles.WriteReportHeader(
+            ws,
+            "Reporte de incidencias",
+            "Detalle operativo",
+            generatedAtUtc,
+            startColumn: 1,
+            endColumn: 10,
+            startRow: 1);
 
-        WriteFilters(ws, query, 4);
+        var nextRow = CorporateExcelStyles.WriteFiltersBlock(
+            ws,
+            startRow: 5,
+            filters: BuildFilterItems(filterLabels));
 
-        const int headerRow = 12;
+        nextRow += 2;
+
+        var headerRow = nextRow;
 
         ws.Cell(headerRow, 1).Value = "ID";
-        ws.Cell(headerRow, 2).Value = "EmpleadoId";
-        ws.Cell(headerRow, 3).Value = "NumEmpleado";
-        ws.Cell(headerRow, 4).Value = "Empleado";
-        ws.Cell(headerRow, 5).Value = "Sucursal";
-        ws.Cell(headerRow, 6).Value = "Tipo";
-        ws.Cell(headerRow, 7).Value = "Estatus";
-        ws.Cell(headerRow, 8).Value = "FechaInicio";
-        ws.Cell(headerRow, 9).Value = "FechaFin";
-        ws.Cell(headerRow, 10).Value = "Comentario";
-        ws.Cell(headerRow, 11).Value = "Creado UTC";
+        ws.Cell(headerRow, 2).Value = "Núm. Emp.";
+        ws.Cell(headerRow, 3).Value = "Empleado";
+        ws.Cell(headerRow, 4).Value = "Sucursal";
+        ws.Cell(headerRow, 5).Value = "Tipo";
+        ws.Cell(headerRow, 6).Value = "Estatus";
+        ws.Cell(headerRow, 7).Value = "Inicio";
+        ws.Cell(headerRow, 8).Value = "Fin";
+        ws.Cell(headerRow, 9).Value = "Comentario";
+        ws.Cell(headerRow, 10).Value = "Creado UTC";
+
+        CorporateExcelStyles.ApplyTableHeader(ws.Range(headerRow, 1, headerRow, 10));
 
         var rowIndex = headerRow + 1;
 
         foreach (var item in rows)
         {
             ws.Cell(rowIndex, 1).Value = item.Id;
-            ws.Cell(rowIndex, 2).Value = item.EmpleadoId;
-            ws.Cell(rowIndex, 3).Value = item.NumEmpleado;
-            ws.Cell(rowIndex, 4).Value = item.Empleado;
-            ws.Cell(rowIndex, 5).Value = item.Sucursal ?? string.Empty;
-            ws.Cell(rowIndex, 6).Value = item.Tipo;
-            ws.Cell(rowIndex, 7).Value = item.Estatus;
-            ws.Cell(rowIndex, 8).Value = item.FechaInicio.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-            ws.Cell(rowIndex, 9).Value = item.FechaFin.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-            ws.Cell(rowIndex, 10).Value = item.Comentario ?? string.Empty;
-            ws.Cell(rowIndex, 11).Value = item.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+            ws.Cell(rowIndex, 2).Value = CorporateReportFormatters.ExcelText(item.NumEmpleado);
+            ws.Cell(rowIndex, 3).Value = CorporateReportFormatters.ExcelText(item.Empleado);
+            ws.Cell(rowIndex, 4).Value = CorporateReportFormatters.ExcelText(item.Sucursal, "(sin sucursal)");
+            ws.Cell(rowIndex, 5).Value = CorporateReportFormatters.FormatLabel(item.Tipo);
+            ws.Cell(rowIndex, 6).Value = CorporateReportFormatters.FormatLabel(item.Estatus);
+            ws.Cell(rowIndex, 7).Value = CorporateReportFormatters.ExcelDate(item.FechaInicio);
+            ws.Cell(rowIndex, 8).Value = CorporateReportFormatters.ExcelDate(item.FechaFin);
+            ws.Cell(rowIndex, 9).Value = CorporateReportFormatters.ExcelText(item.Comentario);
+            ws.Cell(rowIndex, 10).Value = CorporateReportFormatters.ExcelDateTime(item.CreatedAtUtc);
+
             rowIndex++;
         }
 
-        var headerRange = ws.Range(headerRow, 1, headerRow, 11);
-        headerRange.Style.Font.Bold = true;
-        headerRange.Style.Fill.BackgroundColor = XLColor.LightGray;
+        var lastDataRow = rowIndex - 1;
 
-        var lastDataRow = Math.Max(headerRow + 1, rowIndex - 1);
-        ws.Range(headerRow, 1, lastDataRow, 11).SetAutoFilter();
+        CorporateExcelStyles.ApplyDataGrid(ws, headerRow + 1, lastDataRow, 1, 10);
+        CorporateExcelStyles.FinalizeTable(ws, headerRow, 1, 10, lastDataRow);
 
-        ws.SheetView.FreezeRows(headerRow);
-        ws.Columns().AdjustToContents();
+        CorporateExcelStyles.SetColumnWidths(ws,
+            10, // ID
+            14, // NumEmp
+            30, // Empleado
+            22, // Sucursal
+            18, // Tipo
+            16, // Estatus
+            14, // Inicio
+            14, // Fin
+            36, // Comentario
+            22  // Creado UTC
+        );
     }
 
-    private static void BuildResumenSheet(
-        XLWorkbook workbook,
-        IReadOnlyList<IncidenciaExportRowDto> rows,
-        IncidenciaQueryDto query)
+    private static void WriteSummaryTable(
+        IXLWorksheet ws,
+        int startRow,
+        int startColumn,
+        string sectionTitle,
+        string header1,
+        string header2,
+        IReadOnlyList<(string Label, int Count)> rows)
     {
-        var ws = workbook.Worksheets.Add("Resumen");
+        CorporateExcelStyles.WriteSectionTitle(ws, startRow, startColumn, sectionTitle);
 
-        ws.Cell(1, 1).Value = "Resumen de incidencias";
-        ws.Cell(2, 1).Value = "Generado UTC";
-        ws.Cell(2, 2).Value = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        ws.Cell(startRow + 1, startColumn).Value = header1;
+        ws.Cell(startRow + 1, startColumn + 1).Value = header2;
 
-        WriteFilters(ws, query, 4);
+        CorporateExcelStyles.ApplyTableHeader(ws.Range(startRow + 1, startColumn, startRow + 1, startColumn + 1));
 
-        ws.Cell(12, 1).Value = "Total";
-        ws.Cell(12, 2).Value = rows.Count;
+        var rowIndex = startRow + 2;
 
-        ws.Cell(14, 1).Value = "Por estatus";
-        ws.Cell(15, 1).Value = "Estatus";
-        ws.Cell(15, 2).Value = "Cantidad";
-
-        var statusRow = 16;
-        foreach (var group in rows.GroupBy(x => x.Estatus).OrderBy(x => x.Key))
+        foreach (var item in rows)
         {
-            ws.Cell(statusRow, 1).Value = group.Key;
-            ws.Cell(statusRow, 2).Value = group.Count();
-            statusRow++;
+            ws.Cell(rowIndex, startColumn).Value = item.Label;
+            ws.Cell(rowIndex, startColumn + 1).Value = item.Count;
+            rowIndex++;
         }
 
-        ws.Cell(14, 4).Value = "Por tipo";
-        ws.Cell(15, 4).Value = "Tipo";
-        ws.Cell(15, 5).Value = "Cantidad";
+        var lastDataRow = rowIndex - 1;
+        CorporateExcelStyles.ApplyDataGrid(ws, startRow + 2, lastDataRow, startColumn, startColumn + 1);
+    }
 
-        var typeRow = 16;
-        foreach (var group in rows.GroupBy(x => x.Tipo).OrderBy(x => x.Key))
+    private static void ComposeDistributionSection(
+        IContainer container,
+        IReadOnlyList<IncidenciaExportRowDto> rows)
+    {
+        CorporatePdfBlocks.ComposeSection(container, "Distribución", body =>
         {
-            ws.Cell(typeRow, 4).Value = group.Key;
-            ws.Cell(typeRow, 5).Value = group.Count();
-            typeRow++;
-        }
-
-        ws.Range(15, 1, 15, 2).Style.Font.Bold = true;
-        ws.Range(15, 4, 15, 5).Style.Font.Bold = true;
-
-        ws.Columns().AdjustToContents();
-    }
-
-    private static void WriteFilters(IXLWorksheet ws, IncidenciaQueryDto query, int startRow)
-    {
-        ws.Cell(startRow, 1).Value = "EmpleadoId";
-        ws.Cell(startRow, 2).Value = query.EmpleadoId?.ToString(CultureInfo.InvariantCulture) ?? "(todos)";
-
-        ws.Cell(startRow + 1, 1).Value = "SucursalId";
-        ws.Cell(startRow + 1, 2).Value = query.SucursalId?.ToString(CultureInfo.InvariantCulture) ?? "(todas)";
-
-        ws.Cell(startRow + 2, 1).Value = "Tipo";
-        ws.Cell(startRow + 2, 2).Value = query.Tipo?.ToString() ?? "(todos)";
-
-        ws.Cell(startRow + 3, 1).Value = "Estatus";
-        ws.Cell(startRow + 3, 2).Value = query.Estatus?.ToString() ?? "(todos)";
-
-        ws.Cell(startRow + 4, 1).Value = "FechaDesde";
-        ws.Cell(startRow + 4, 2).Value = query.FechaDesde?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "(sin límite)";
-
-        ws.Cell(startRow + 5, 1).Value = "FechaHasta";
-        ws.Cell(startRow + 5, 2).Value = query.FechaHasta?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "(sin límite)";
-
-        ws.Cell(startRow + 6, 1).Value = "SoloPendientes";
-        ws.Cell(startRow + 6, 2).Value = query.SoloPendientes ? "Sí" : "No";
-
-        ws.Range(startRow, 1, startRow + 6, 1).Style.Font.Bold = true;
-    }
-
-    private static void ComposeFilters(IContainer container, IncidenciaQueryDto query)
-    {
-        container
-            .Border(1)
-            .Padding(8)
-            .Column(column =>
+            body.Item().Row(row =>
             {
-                column.Spacing(2);
+                row.Spacing(12);
 
-                column.Item().Text(text =>
+                row.RelativeItem().Column(left =>
                 {
-                    text.Span("EmpleadoId: ").SemiBold();
-                    text.Span(query.EmpleadoId?.ToString(CultureInfo.InvariantCulture) ?? "(todos)");
+                    left.Spacing(4);
+
+                    left.Item().Text("Por estatus")
+                        .FontSize(9.5f)
+                        .SemiBold()
+                        .FontColor(CorporateReportPalette.Ink700);
+
+                    var groups = rows
+                        .GroupBy(x => CorporateReportFormatters.FormatLabel(x.Estatus))
+                        .OrderBy(x => x.Key)
+                        .ToList();
+
+                    if (groups.Count == 0)
+                    {
+                        left.Item().Text("Sin incidencias para resumir.")
+                            .FontSize(8.5f)
+                            .FontColor(CorporateReportPalette.Ink500);
+                    }
+                    else
+                    {
+                        foreach (var group in groups)
+                        {
+                            left.Item().Text(text =>
+                            {
+                                text.Span($"{group.Key}: ").SemiBold().FontColor(CorporateReportPalette.Ink700);
+                                text.Span(group.Count().ToString(CultureInfo.InvariantCulture)).FontColor(CorporateReportPalette.Ink900);
+                            });
+                        }
+                    }
                 });
 
-                column.Item().Text(text =>
+                row.RelativeItem().Column(right =>
                 {
-                    text.Span("SucursalId: ").SemiBold();
-                    text.Span(query.SucursalId?.ToString(CultureInfo.InvariantCulture) ?? "(todas)");
-                });
+                    right.Spacing(4);
 
-                column.Item().Text(text =>
-                {
-                    text.Span("Tipo: ").SemiBold();
-                    text.Span(query.Tipo?.ToString() ?? "(todos)");
-                });
+                    right.Item().Text("Por tipo")
+                        .FontSize(9.5f)
+                        .SemiBold()
+                        .FontColor(CorporateReportPalette.Ink700);
 
-                column.Item().Text(text =>
-                {
-                    text.Span("Estatus: ").SemiBold();
-                    text.Span(query.Estatus?.ToString() ?? "(todos)");
-                });
+                    var groups = rows
+                        .GroupBy(x => CorporateReportFormatters.FormatLabel(x.Tipo))
+                        .OrderBy(x => x.Key)
+                        .ToList();
 
-                column.Item().Text(text =>
-                {
-                    text.Span("FechaDesde: ").SemiBold();
-                    text.Span(query.FechaDesde?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "(sin límite)");
-                });
-
-                column.Item().Text(text =>
-                {
-                    text.Span("FechaHasta: ").SemiBold();
-                    text.Span(query.FechaHasta?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "(sin límite)");
-                });
-
-                column.Item().Text(text =>
-                {
-                    text.Span("SoloPendientes: ").SemiBold();
-                    text.Span(query.SoloPendientes ? "Sí" : "No");
+                    if (groups.Count == 0)
+                    {
+                        right.Item().Text("Sin incidencias para resumir.")
+                            .FontSize(8.5f)
+                            .FontColor(CorporateReportPalette.Ink500);
+                    }
+                    else
+                    {
+                        foreach (var group in groups)
+                        {
+                            right.Item().Text(text =>
+                            {
+                                text.Span($"{group.Key}: ").SemiBold().FontColor(CorporateReportPalette.Ink700);
+                                text.Span(group.Count().ToString(CultureInfo.InvariantCulture)).FontColor(CorporateReportPalette.Ink900);
+                            });
+                        }
+                    }
                 });
             });
-    }
-
-    private static void ComposeSummary(IContainer container, IReadOnlyList<IncidenciaExportRowDto> rows)
-    {
-        var pendientes = rows.Count(x => x.Estatus == EstatusIncidencia.PENDIENTE.ToString());
-        var aprobadas = rows.Count(x => x.Estatus == EstatusIncidencia.APROBADA.ToString());
-        var rechazadas = rows.Count(x => x.Estatus == EstatusIncidencia.RECHAZADA.ToString());
-
-        container
-            .Border(1)
-            .Padding(8)
-            .Column(column =>
-            {
-                column.Spacing(4);
-
-                column.Item().Text("Resumen").SemiBold().FontSize(11);
-
-                column.Item().Row(row =>
-                {
-                    row.RelativeItem().Text($"Total: {rows.Count}");
-                    row.RelativeItem().Text($"Pendientes: {pendientes}");
-                    row.RelativeItem().Text($"Aprobadas: {aprobadas}");
-                    row.RelativeItem().Text($"Rechazadas: {rechazadas}");
-                });
-            });
-    }
-
-    private static void ComposeDetailTable(IContainer container, IReadOnlyList<IncidenciaExportRowDto> rows)
-    {
-        container.Table(table =>
-        {
-            table.ColumnsDefinition(columns =>
-            {
-                columns.ConstantColumn(28);
-                columns.ConstantColumn(58);
-                columns.RelativeColumn(2);
-                columns.RelativeColumn(2);
-                columns.RelativeColumn();
-                columns.RelativeColumn();
-                columns.ConstantColumn(55);
-                columns.ConstantColumn(55);
-                columns.RelativeColumn(2);
-            });
-
-            table.Header(header =>
-            {
-                header.Cell().Element(HeaderCellStyle).Text("ID").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("NumEmp").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Empleado").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Sucursal").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Tipo").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Estatus").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Inicio").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Fin").SemiBold();
-                header.Cell().Element(HeaderCellStyle).Text("Comentario").SemiBold();
-            });
-
-            foreach (var item in rows)
-            {
-                table.Cell().Element(DataCellStyle).Text(item.Id.ToString(CultureInfo.InvariantCulture));
-                table.Cell().Element(DataCellStyle).Text(item.NumEmpleado);
-                table.Cell().Element(DataCellStyle).Text(item.Empleado);
-                table.Cell().Element(DataCellStyle).Text(item.Sucursal ?? string.Empty);
-                table.Cell().Element(DataCellStyle).Text(item.Tipo);
-                table.Cell().Element(DataCellStyle).Text(item.Estatus);
-                table.Cell().Element(DataCellStyle).Text(item.FechaInicio.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
-                table.Cell().Element(DataCellStyle).Text(item.FechaFin.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
-                table.Cell().Element(DataCellStyle).Text(item.Comentario ?? string.Empty);
-            }
         });
     }
 
-    private static IContainer HeaderCellStyle(IContainer container)
+    private static void ComposeDetailSection(
+        IContainer container,
+        IReadOnlyList<IncidenciaExportRowDto> rows)
     {
-        return container.Border(1).Padding(3);
-    }
+        CorporatePdfBlocks.ComposeSection(container, "Detalle de incidencias", body =>
+        {
+            if (rows.Count == 0)
+            {
+                body.Item().Element(c =>
+                    CorporatePdfBlocks.ComposeEmptyState(c, "No se encontraron incidencias con los filtros aplicados."));
+                return;
+            }
 
-    private static IContainer DataCellStyle(IContainer container)
-    {
-        return container.BorderBottom(1).BorderLeft(1).BorderRight(1).Padding(3);
+            body.Item().Table(table =>
+            {
+                table.ColumnsDefinition(columns =>
+                {
+                    columns.ConstantColumn(28);     // ID
+                    columns.ConstantColumn(64);     // NumEmp
+                    columns.RelativeColumn(2.8f);   // Empleado
+                    columns.RelativeColumn(1.9f);   // Sucursal
+                    columns.RelativeColumn(1.4f);   // Tipo
+                    columns.RelativeColumn(1.3f);   // Estatus
+                    columns.ConstantColumn(58);     // Inicio
+                    columns.ConstantColumn(58);     // Fin
+                    columns.RelativeColumn(2.4f);   // Comentario
+                    columns.ConstantColumn(78);     // Creado UTC
+                });
+
+                table.Header(header =>
+                {
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("ID");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Núm. Emp.");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Empleado");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Sucursal");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Tipo");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Estatus");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Inicio");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Fin");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Comentario");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Creado UTC");
+                });
+
+                for (var index = 0; index < rows.Count; index++)
+                {
+                    var item = rows[index];
+                    var background = CorporatePdfStyles.ZebraRow(index);
+
+                    table.Cell().Element(c => c.TableDataCell(background, emphasize: true))
+                        .Text(item.Id.ToString(CultureInfo.InvariantCulture));
+
+                    table.Cell().Element(c => c.TableDataCell(background, emphasize: true))
+                        .Text(CorporateReportFormatters.NullSafe(item.NumEmpleado));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.NullSafe(item.Empleado));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.NullSafe(item.Sucursal, "(sin sucursal)"));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.FormatLabel(item.Tipo));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.FormatLabel(item.Estatus));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.FormatDate(item.FechaInicio));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.FormatDate(item.FechaFin));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.NullSafe(item.Comentario));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.FormatDateTime(item.CreatedAtUtc));
+                }
+            });
+        });
     }
 
     private static string BuildFileName(IncidenciaQueryDto query, string extension)
     {
-        var parts = new List<string>
-        {
+        return CorporateReportFormatters.BuildTimestampedFileName(
             "incidencias",
-            DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture)
-        };
+            extension,
+            query.SoloPendientes ? "pendientes" : null,
+            query.SucursalId.HasValue ? $"sucursal_{query.SucursalId.Value}" : null,
+            query.EmpleadoId.HasValue ? $"empleado_{query.EmpleadoId.Value}" : null);
+    }
 
-        if (query.SoloPendientes)
-            parts.Add("pendientes");
+    private static string NormalizeKey(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
 
-        if (query.SucursalId.HasValue)
-            parts.Add($"sucursal-{query.SucursalId.Value}");
+        return value.Trim().ToUpperInvariant();
+    }
 
-        if (query.EmpleadoId.HasValue)
-            parts.Add($"empleado-{query.EmpleadoId.Value}");
-
-        return string.Join("_", parts) + "." + extension;
+    private sealed class IncidenciasReportFilterLabels
+    {
+        public string Empleado { get; set; } = "(todos)";
+        public string Sucursal { get; set; } = "(todas)";
+        public string Tipo { get; set; } = "(todos)";
+        public string Estatus { get; set; } = "(todos)";
+        public string FechaDesde { get; set; } = "(sin límite)";
+        public string FechaHasta { get; set; } = "(sin límite)";
+        public string Periodo { get; set; } = "(sin límite)";
+        public string SoloPendientes { get; set; } = "No";
     }
 }

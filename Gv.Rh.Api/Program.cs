@@ -163,9 +163,12 @@ builder.Services.AddScoped<AuditSaveChangesInterceptor>();
 // Services de app
 builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddScoped<TokenService>();
+
 builder.Services.AddScoped<IIncidenciasReportService, IncidenciasReportService>();
 builder.Services.AddScoped<IEmpleadosReportService, EmpleadosReportService>();
 builder.Services.AddScoped<IEmpleadoFichaReportService, EmpleadoFichaReportService>();
+builder.Services.AddScoped<IAuditReportService, AuditReportService>();
+
 builder.Services.AddScoped<IEmpleadoDocumentoStorageService, EmpleadoDocumentoStorageService>();
 builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteService>();
 builder.Services.AddScoped<IEmpleadoNumberService, EmpleadoNumberService>();

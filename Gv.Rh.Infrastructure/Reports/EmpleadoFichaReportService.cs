@@ -2,6 +2,8 @@
 using Gv.Rh.Application.DTOs.Common;
 using Gv.Rh.Domain.Common;
 using Gv.Rh.Infrastructure.Persistence;
+using Gv.Rh.Infrastructure.Reports.Common;
+using Gv.Rh.Infrastructure.Reports.Pdf;
 using Microsoft.EntityFrameworkCore;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
@@ -88,6 +90,60 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
             .ThenByDescending(x => x.CreatedAtUtc)
             .ToListAsync(cancellationToken);
 
+        BuildDocumentStatus(empleado, documentos);
+
+        empleado.Movimientos = movimientos;
+
+        var generatedAtUtc = DateTime.UtcNow;
+        var nombreCompleto = CorporateReportFormatters.CombineFullName(
+            empleado.Nombres,
+            empleado.ApellidoPaterno,
+            empleado.ApellidoMaterno);
+
+        var pdfBytes = Document.Create(document =>
+        {
+            document.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.Margin(1.2f, Unit.Centimetre);
+                page.DefaultTextStyle(x => x.FontSize(9).FontColor(CorporateReportPalette.Ink900));
+
+                page.Header().Element(container =>
+                    CorporatePdfBlocks.ComposeReportHeader(
+                        container,
+                        "Ficha de empleado",
+                        nombreCompleto,
+                        generatedAtUtc));
+
+                page.Content().Column(column =>
+                {
+                    column.Spacing(10);
+
+                    column.Item().Element(container => ComposeOverviewSection(container, empleado));
+                    column.Item().Element(container => ComposeSummarySection(container, empleado));
+                    column.Item().Element(container => ComposePersonalDataSection(container, empleado));
+                    column.Item().Element(container => ComposeLaborSection(container, empleado));
+                    column.Item().Element(container => ComposeHistorySection(container, empleado.Movimientos));
+                    column.Item().Element(container => ComposeDocumentsSection(container, empleado));
+                });
+
+                page.Footer().Element(container =>
+                    CorporatePdfBlocks.ComposeReportFooter(container, generatedAtUtc));
+            });
+        }).GeneratePdf();
+
+        return new ReportFileDto
+        {
+            Content = pdfBytes,
+            ContentType = "application/pdf",
+            FileName = BuildFileName(empleado.NumEmpleado)
+        };
+    }
+
+    private static void BuildDocumentStatus(
+        EmpleadoFichaViewModel empleado,
+        IReadOnlyList<Domain.Entities.EmpleadoDocumento> documentos)
+    {
         var latestByTipo = documentos
             .GroupBy(x => x.Tipo)
             .ToDictionary(g => g.Key, g => g.First());
@@ -165,569 +221,245 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
             });
         }
 
-        empleado.Movimientos = movimientos;
         empleado.Documentos = documentoItems;
         empleado.DocumentosCargados = cargados;
         empleado.DocumentosFaltantes = faltantes;
         empleado.DocumentosPorVencer = porVencer;
         empleado.DocumentosVencidos = vencidos;
-
-        var generatedAtUtc = DateTime.UtcNow;
-
-        var pdfBytes = Document.Create(document =>
-        {
-            document.Page(page =>
-            {
-                page.Size(PageSizes.A4);
-                page.Margin(1.2f, Unit.Centimetre);
-                page.DefaultTextStyle(x => x.FontSize(9).FontColor("#1F2937"));
-
-                page.Header().Element(container => ComposeHeader(container, empleado, generatedAtUtc));
-
-                page.Content().Column(column =>
-                {
-                    column.Spacing(10);
-
-                    column.Item().Element(container => ComposeSummary(container, empleado));
-                    column.Item().Element(container => ComposeDatosPersonales(container, empleado));
-                    column.Item().Element(container => ComposeSituacionLaboral(container, empleado));
-                    column.Item().Element(container => ComposeHistorialLaboral(container, empleado.Movimientos));
-                    column.Item().Element(container => ComposeSituacionDocumental(container, empleado));
-                });
-
-                page.Footer().Element(container => ComposeFooter(container, generatedAtUtc));
-            });
-        }).GeneratePdf();
-
-        return new ReportFileDto
-        {
-            Content = pdfBytes,
-            ContentType = "application/pdf",
-            FileName = BuildFileName(empleado.NumEmpleado)
-        };
     }
 
-    private static void ComposeHeader(
-        IContainer container,
-        EmpleadoFichaViewModel empleado,
-        DateTime generatedAtUtc)
+    private static void ComposeOverviewSection(IContainer container, EmpleadoFichaViewModel empleado)
     {
-        container.PaddingBottom(10).Column(column =>
+        CorporatePdfBlocks.ComposeSection(container, "Identificación general", body =>
         {
-            column.Item().Row(row =>
+            body.Item().Row(row =>
             {
+                row.Spacing(12);
+
                 row.RelativeItem().Column(left =>
                 {
-                    left.Spacing(3);
-
-                    left.Item().Text("GV RH · Recursos Humanos")
-                        .FontSize(10)
-                        .FontColor("#475569")
-                        .SemiBold();
-
-                    left.Item().Text("Ficha de empleado")
-                        .FontSize(21)
-                        .Bold()
-                        .FontColor("#0F172A");
-
-                    left.Item().Text(GetNombreCompleto(empleado))
-                        .FontSize(13.5f)
-                        .SemiBold()
-                        .FontColor("#1D4ED8");
-
-                    left.Item().Text($"Generado UTC: {generatedAtUtc:yyyy-MM-dd HH:mm:ss}")
-                        .FontSize(8.5f)
-                        .FontColor("#64748B");
+                    left.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Número de empleado", CorporateReportFormatters.NullSafe(empleado.NumEmpleado));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Nombre completo", CorporateReportFormatters.CombineFullName(
+                        empleado.Nombres,
+                        empleado.ApellidoPaterno,
+                        empleado.ApellidoMaterno));
                 });
 
-                row.ConstantItem(215).AlignRight().Column(right =>
+                row.RelativeItem().Column(center =>
+                {
+                    center.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(center, "Puesto actual", CorporateReportFormatters.NullSafe(empleado.Puesto));
+                    CorporatePdfBlocks.ComposeLabeledField(center, "Departamento", CorporateReportFormatters.NullSafe(empleado.Departamento));
+                });
+
+                row.RelativeItem().Column(right =>
                 {
                     right.Spacing(6);
 
-                    right.Item().AlignRight().Text($"Empleado: {NullSafe(empleado.NumEmpleado)}")
-                        .FontSize(10.5f)
-                        .SemiBold()
-                        .FontColor("#0F172A");
-
-                    right.Item().AlignRight().Row(chips =>
+                    right.Item().Row(chips =>
                     {
                         chips.Spacing(6);
 
                         chips.RelativeItem().Element(c =>
-                            StatusChip(
+                            CorporatePdfBlocks.ComposeStatusChip(
                                 c,
                                 "Estatus",
-                                FormatLabel(empleado.EstatusLaboralActual),
-                                "#1D4ED8"));
+                                CorporateReportFormatters.FormatLabel(empleado.EstatusLaboralActual),
+                                CorporateReportPalette.GetEmpleadoStatusAccent(empleado.EstatusLaboralActual)));
 
                         chips.RelativeItem().Element(c =>
-                            StatusChip(
+                            CorporatePdfBlocks.ComposeStatusChip(
                                 c,
                                 "Activo",
-                                empleado.Activo ? "Sí" : "No",
-                                empleado.Activo ? "#15803D" : "#B45309"));
+                                CorporateReportFormatters.FormatBool(empleado.Activo),
+                                CorporateReportPalette.GetBooleanAccent(empleado.Activo)));
                     });
+
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Sucursal", CorporateReportFormatters.NullSafe(empleado.Sucursal));
                 });
             });
-
-            column.Item().PaddingTop(7).LineHorizontal(1).LineColor("#D7DFEA");
         });
     }
 
-    private static void ComposeSummary(IContainer container, EmpleadoFichaViewModel empleado)
+    private static void ComposeSummarySection(IContainer container, EmpleadoFichaViewModel empleado)
     {
-        container.Row(row =>
-        {
-            row.Spacing(10);
-
-            SummaryCard(
-                row.RelativeItem(),
-                "Puesto",
-                NullSafe(empleado.Puesto),
-                "Posición vigente",
-                "#B45309");
-
-            SummaryCard(
-                row.RelativeItem(),
-                "Departamento",
-                NullSafe(empleado.Departamento),
-                "Área organizacional",
-                "#1D4ED8");
-
-            SummaryCard(
-                row.RelativeItem(),
-                "Sucursal",
-                NullSafe(empleado.Sucursal),
-                "Centro de trabajo actual",
-                "#7C3AED");
-
-            SummaryCard(
-                row.RelativeItem(),
-                "Ingreso",
-                FormatDate(empleado.FechaIngreso),
-                "Fecha de alta",
-                "#0F766E");
-        });
+        CorporatePdfBlocks.ComposeKpiRow(
+            container,
+            ("Puesto", CorporateReportFormatters.NullSafe(empleado.Puesto), "Posición vigente", CorporateReportPalette.KpiWarning),
+            ("Departamento", CorporateReportFormatters.NullSafe(empleado.Departamento), "Área organizacional", CorporateReportPalette.KpiPrimary),
+            ("Sucursal", CorporateReportFormatters.NullSafe(empleado.Sucursal), "Centro de trabajo actual", CorporateReportPalette.KpiPurple),
+            ("Ingreso", CorporateReportFormatters.FormatDate(empleado.FechaIngreso), "Fecha de alta", CorporateReportPalette.KpiTeal));
     }
 
-    private static void ComposeDatosPersonales(IContainer container, EmpleadoFichaViewModel empleado)
+    private static void ComposePersonalDataSection(IContainer container, EmpleadoFichaViewModel empleado)
     {
-        SectionCard(container, "Datos personales", body =>
+        CorporatePdfBlocks.ComposeSection(container, "Datos personales", body =>
         {
             body.Item().Row(row =>
             {
-                row.Spacing(18);
+                row.Spacing(14);
 
                 row.RelativeItem().Column(left =>
                 {
-                    left.Spacing(6);
-                    Field(left, "Fecha de nacimiento", FormatDateNullable(empleado.FechaNacimiento));
+                    left.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Fecha de nacimiento", CorporateReportFormatters.FormatDateNullable(empleado.FechaNacimiento));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Teléfono", CorporateReportFormatters.NullSafe(empleado.Telefono));
                 });
 
                 row.RelativeItem().Column(right =>
                 {
-                    right.Spacing(6);
-                    Field(right, "Teléfono", NullSafe(empleado.Telefono));
-                    Field(right, "Correo", NullSafe(empleado.Email));
+                    right.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Correo", CorporateReportFormatters.NullSafe(empleado.Email));
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Empleado ID", empleado.Id.ToString(CultureInfo.InvariantCulture));
                 });
             });
         });
     }
 
-    private static void ComposeSituacionLaboral(IContainer container, EmpleadoFichaViewModel empleado)
+    private static void ComposeLaborSection(IContainer container, EmpleadoFichaViewModel empleado)
     {
-        SectionCard(container, "Situación laboral", body =>
+        CorporatePdfBlocks.ComposeSection(container, "Situación laboral", body =>
         {
             body.Item().Row(row =>
             {
-                row.Spacing(18);
+                row.Spacing(14);
 
                 row.RelativeItem().Column(left =>
                 {
-                    left.Spacing(6);
-                    Field(left, "Fecha de baja actual", FormatDateNullable(empleado.FechaBajaActual));
-                    Field(left, "Tipo de baja actual", FormatLabelNullable(empleado.TipoBajaActual));
+                    left.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Fecha de baja actual", CorporateReportFormatters.FormatDateNullable(empleado.FechaBajaActual));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Tipo de baja actual", CorporateReportFormatters.FormatNullableLabel(empleado.TipoBajaActual));
                 });
 
                 row.RelativeItem().Column(right =>
                 {
-                    right.Spacing(6);
-                    Field(right, "Fecha de reingreso actual", FormatDateNullable(empleado.FechaReingresoActual));
-                    Field(right, "Recontratable", FormatBoolNullable(empleado.Recontratable));
+                    right.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Fecha de reingreso actual", CorporateReportFormatters.FormatDateNullable(empleado.FechaReingresoActual));
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Recontratable", CorporateReportFormatters.FormatBoolNullable(empleado.Recontratable));
                 });
             });
         });
     }
 
-    private static void ComposeHistorialLaboral(
+    private static void ComposeHistorySection(
         IContainer container,
         IReadOnlyList<EmpleadoFichaMovimientoViewModel> movimientos)
     {
-        SectionCard(container, "Historial laboral", body =>
+        CorporatePdfBlocks.ComposeSection(container, "Historial laboral", body =>
         {
             if (movimientos.Count == 0)
             {
-                body.Item()
-                    .Border(1)
-                    .BorderColor("#E5EAF2")
-                    .CornerRadius(6)
-                    .PaddingVertical(6)
-                    .PaddingHorizontal(8)
-                    .Text("Sin movimientos laborales registrados.")
-                    .FontSize(8.5f)
-                    .FontColor("#64748B");
-
+                body.Item().Element(c =>
+                    CorporatePdfBlocks.ComposeEmptyState(c, "Sin movimientos laborales registrados."));
                 return;
             }
 
             body.Item().Column(list =>
             {
-                list.Spacing(4);
+                list.Spacing(5);
 
                 foreach (var movimiento in movimientos)
                 {
-                    list.Item()
-                        .Border(1)
-                        .BorderColor("#E5EAF2")
-                        .CornerRadius(6)
-                        .PaddingVertical(6)
-                        .PaddingHorizontal(8)
-                        .Column(card =>
-                        {
-                            card.Spacing(3);
-
-                            card.Item().Row(row =>
+                    list.Item().Element(c =>
+                    {
+                        c.ReportMutedCard(cornerRadius: 6, padding: 8)
+                            .Column(card =>
                             {
-                                row.RelativeItem().Text(FormatLabel(movimiento.TipoMovimiento))
-                                    .FontSize(9.2f)
-                                    .SemiBold()
-                                    .FontColor("#0F172A");
+                                card.Spacing(3);
 
-                                row.ConstantItem(82).AlignRight().Text(FormatDate(movimiento.FechaMovimiento))
-                                    .FontSize(8.1f)
-                                    .FontColor("#64748B");
-                            });
-
-                            card.Item().Row(row =>
-                            {
-                                row.Spacing(10);
-
-                                row.RelativeItem().Text(text =>
+                                card.Item().Row(row =>
                                 {
-                                    text.Span("Tipo baja: ").SemiBold().FontColor("#64748B");
-                                    text.Span(FormatLabelNullable(movimiento.TipoBaja)).FontColor("#0F172A");
+                                    row.RelativeItem().Text(CorporateReportFormatters.FormatLabel(movimiento.TipoMovimiento))
+                                        .FontSize(9.2f)
+                                        .SemiBold()
+                                        .FontColor(CorporateReportPalette.Ink900);
+
+                                    row.ConstantItem(82).AlignRight().Text(CorporateReportFormatters.FormatDate(movimiento.FechaMovimiento))
+                                        .FontSize(8.2f)
+                                        .FontColor(CorporateReportPalette.Ink500);
                                 });
 
-                                row.RelativeItem().Text(text =>
-                                {
-                                    text.Span("Motivo: ").SemiBold().FontColor("#64748B");
-                                    text.Span(NullSafe(movimiento.Motivo)).FontColor("#0F172A");
-                                });
-                            });
-
-                            if (!string.IsNullOrWhiteSpace(movimiento.Comentario))
-                            {
                                 card.Item().Text(text =>
                                 {
-                                    text.Span("Comentario: ").SemiBold().FontColor("#64748B");
-                                    text.Span(movimiento.Comentario!.Trim()).FontColor("#0F172A");
+                                    text.Span("Tipo de baja: ").SemiBold().FontColor(CorporateReportPalette.Ink600);
+                                    text.Span(CorporateReportFormatters.FormatNullableLabel(movimiento.TipoBaja)).FontColor(CorporateReportPalette.Ink900);
                                 });
-                            }
-                        });
+
+                                card.Item().Text(text =>
+                                {
+                                    text.Span("Motivo: ").SemiBold().FontColor(CorporateReportPalette.Ink600);
+                                    text.Span(CorporateReportFormatters.NullSafe(movimiento.Motivo)).FontColor(CorporateReportPalette.Ink900);
+                                });
+
+                                if (!string.IsNullOrWhiteSpace(movimiento.Comentario))
+                                {
+                                    card.Item().Text(text =>
+                                    {
+                                        text.Span("Comentario: ").SemiBold().FontColor(CorporateReportPalette.Ink600);
+                                        text.Span(movimiento.Comentario!.Trim()).FontColor(CorporateReportPalette.Ink900);
+                                    });
+                                }
+                            });
+                    });
                 }
             });
         });
     }
 
-    private static void ComposeSituacionDocumental(
-        IContainer container,
-        EmpleadoFichaViewModel empleado)
+    private static void ComposeDocumentsSection(IContainer container, EmpleadoFichaViewModel empleado)
     {
-        SectionCard(container, "Situación documental", body =>
+        CorporatePdfBlocks.ComposeSection(container, "Situación documental", body =>
         {
-            body.Item().Row(row =>
+            body.Item().Element(c =>
+                CorporatePdfBlocks.ComposeKpiRow(
+                    c,
+                    ("Requeridos", RequiredTipos.Length.ToString(CultureInfo.InvariantCulture), "Documentos base", CorporateReportPalette.KpiPrimary),
+                    ("Cargados", empleado.DocumentosCargados.ToString(CultureInfo.InvariantCulture), "Disponibles", CorporateReportPalette.KpiSuccess),
+                    ("Pendientes", empleado.DocumentosFaltantes.ToString(CultureInfo.InvariantCulture), "Por completar", CorporateReportPalette.KpiWarning),
+                    ("Por vencer", empleado.DocumentosPorVencer.ToString(CultureInfo.InvariantCulture), "Atención próxima", CorporateReportPalette.KpiPurple),
+                    ("Vencidos", empleado.DocumentosVencidos.ToString(CultureInfo.InvariantCulture), "Requieren acción", CorporateReportPalette.Danger)));
+
+            body.Item().PaddingTop(4).Table(table =>
             {
-                row.Spacing(6);
-
-                MiniStatCard(row.RelativeItem(), "Requeridos", RequiredTipos.Length.ToString(CultureInfo.InvariantCulture), "#1D4ED8");
-                MiniStatCard(row.RelativeItem(), "Cargados", empleado.DocumentosCargados.ToString(CultureInfo.InvariantCulture), "#15803D");
-                MiniStatCard(row.RelativeItem(), "Pendientes", empleado.DocumentosFaltantes.ToString(CultureInfo.InvariantCulture), "#B45309");
-                MiniStatCard(row.RelativeItem(), "Por vencer", empleado.DocumentosPorVencer.ToString(CultureInfo.InvariantCulture), "#7C3AED");
-                MiniStatCard(row.RelativeItem(), "Vencidos", empleado.DocumentosVencidos.ToString(CultureInfo.InvariantCulture), "#B91C1C");
-            });
-
-            body.Item().PaddingTop(4).Column(list =>
-            {
-                list.Spacing(4);
-
-                foreach (var documento in empleado.Documentos)
+                table.ColumnsDefinition(columns =>
                 {
-                    list.Item()
-                        .Border(1)
-                        .BorderColor("#E5EAF2")
-                        .CornerRadius(6)
-                        .PaddingVertical(5)
-                        .PaddingHorizontal(8)
-                        .Row(row =>
-                        {
-                            row.RelativeItem().Text(FormatTipoDocumento(documento.Tipo))
-                                .FontSize(8.8f)
-                                .SemiBold()
-                                .FontColor("#0F172A");
+                    columns.RelativeColumn(2.4f);   // Documento
+                    columns.ConstantColumn(90);     // Estado
+                    columns.ConstantColumn(82);     // Vencimiento
+                });
 
-                            row.ConstantItem(88).AlignCenter().Text(documento.Estado)
-                                .FontSize(8f)
-                                .SemiBold()
-                                .FontColor(GetEstadoDocumentoColor(documento.Estado));
+                table.Header(header =>
+                {
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Documento");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Estado");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Vencimiento");
+                });
 
-                            row.ConstantItem(88).AlignRight().Text(
-                                documento.FechaVencimiento.HasValue
-                                    ? FormatDate(documento.FechaVencimiento.Value)
-                                    : "—")
-                                .FontSize(8f)
-                                .FontColor("#64748B");
-                        });
+                for (var index = 0; index < empleado.Documentos.Count; index++)
+                {
+                    var item = empleado.Documentos[index];
+                    var background = CorporatePdfStyles.ZebraRow(index);
+
+                    table.Cell().Element(c => c.TableDataCell(background, emphasize: true))
+                        .Text(CorporateReportFormatters.FormatTipoDocumento(item.Tipo));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(item.Estado);
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.FormatDateNullable(item.FechaVencimiento));
                 }
             });
         });
-    }
-
-    private static void SectionCard(IContainer container, string title, Action<ColumnDescriptor> buildBody)
-    {
-        container
-            .Background("#FFFFFF")
-            .Border(1)
-            .BorderColor("#D7DFEA")
-            .CornerRadius(8)
-            .Padding(10)
-            .Column(column =>
-            {
-                column.Spacing(6);
-
-                column.Item().Text(title)
-                    .FontSize(11)
-                    .Bold()
-                    .FontColor("#0F172A");
-
-                column.Item().LineHorizontal(1).LineColor("#E5EAF2");
-
-                column.Item().Column(body =>
-                {
-                    body.Spacing(4);
-                    buildBody(body);
-                });
-            });
-    }
-
-    private static void Field(ColumnDescriptor column, string label, string value)
-    {
-        column.Item().PaddingBottom(2).Column(item =>
-        {
-            item.Spacing(1.5f);
-
-            item.Item().Text(label)
-                .FontSize(7.7f)
-                .SemiBold()
-                .FontColor("#64748B");
-
-            item.Item().Text(string.IsNullOrWhiteSpace(value) ? "—" : value)
-                .FontSize(10.2f)
-                .FontColor("#0F172A")
-                .SemiBold();
-        });
-    }
-
-    private static void SummaryCard(
-        IContainer container,
-        string title,
-        string value,
-        string subtitle,
-        string accentColor)
-    {
-        container
-            .Background("#FFFFFF")
-            .Border(1)
-            .BorderColor("#D7DFEA")
-            .CornerRadius(8)
-            .Padding(11)
-            .Column(column =>
-            {
-                column.Spacing(5);
-
-                column.Item().LineHorizontal(3).LineColor(accentColor);
-
-                column.Item().PaddingTop(3).Text(title)
-                    .FontSize(8.5f)
-                    .SemiBold()
-                    .FontColor("#64748B");
-
-                column.Item().Text(string.IsNullOrWhiteSpace(value) ? "—" : value)
-                    .FontSize(11.5f)
-                    .Bold()
-                    .FontColor("#0F172A");
-
-                column.Item().Text(subtitle)
-                    .FontSize(7.8f)
-                    .FontColor("#94A3B8");
-            });
-    }
-
-    private static void MiniStatCard(IContainer container, string title, string value, string color)
-    {
-        container
-            .Border(1)
-            .BorderColor("#E5EAF2")
-            .CornerRadius(6)
-            .PaddingVertical(6)
-            .PaddingHorizontal(8)
-            .Column(column =>
-            {
-                column.Spacing(1);
-
-                column.Item().Text(title)
-                    .FontSize(7.1f)
-                    .FontColor("#64748B");
-
-                column.Item().Text(value)
-                    .FontSize(10f)
-                    .SemiBold()
-                    .FontColor(color);
-            });
-    }
-
-    private static void StatusChip(IContainer container, string label, string value, string accentColor)
-    {
-        container
-            .Background("#FFFFFF")
-            .Border(1)
-            .BorderColor("#D7DFEA")
-            .CornerRadius(7)
-            .PaddingVertical(5)
-            .PaddingHorizontal(8)
-            .Column(column =>
-            {
-                column.Spacing(1);
-
-                column.Item().AlignCenter().Text(label)
-                    .FontSize(7.5f)
-                    .FontColor("#64748B");
-
-                column.Item().AlignCenter().Text(string.IsNullOrWhiteSpace(value) ? "—" : value)
-                    .FontSize(9)
-                    .SemiBold()
-                    .FontColor(accentColor);
-            });
-    }
-
-    private static void ComposeFooter(IContainer container, DateTime generatedAtUtc)
-    {
-        container.PaddingTop(6).Column(column =>
-        {
-            column.Item().LineHorizontal(1).LineColor("#D7DFEA");
-
-            column.Item().PaddingTop(4).Row(row =>
-            {
-                row.RelativeItem().Text($"Emitido: {generatedAtUtc:yyyy-MM-dd HH:mm:ss} UTC")
-                    .FontSize(8)
-                    .FontColor("#64748B");
-
-                row.ConstantItem(90).AlignRight().Text(text =>
-                {
-                    text.Span("Página ").FontSize(8).FontColor("#64748B");
-                    text.CurrentPageNumber().FontSize(8).SemiBold();
-                    text.Span(" de ").FontSize(8).FontColor("#64748B");
-                    text.TotalPages().FontSize(8).SemiBold();
-                });
-            });
-        });
-    }
-
-    private static string GetNombreCompleto(EmpleadoFichaViewModel empleado)
-    {
-        var parts = new[]
-        {
-            empleado.Nombres,
-            empleado.ApellidoPaterno,
-            empleado.ApellidoMaterno
-        };
-
-        return string.Join(" ", parts.Where(x => !string.IsNullOrWhiteSpace(x)));
-    }
-
-    private static string NullSafe(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) ? "—" : value.Trim();
-    }
-
-    private static string FormatDate(DateOnly value)
-    {
-        return value.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture);
-    }
-
-    private static string FormatDateNullable(DateOnly? value)
-    {
-        return value.HasValue
-            ? value.Value.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture)
-            : "—";
-    }
-
-    private static string FormatBoolNullable(bool? value)
-    {
-        return value.HasValue ? (value.Value ? "Sí" : "No") : "—";
-    }
-
-    private static string FormatLabel(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return "—";
-
-        return string.Join(
-            " ",
-            value.Trim()
-                .Replace("_", " ")
-                .ToLowerInvariant()
-                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                .Select(word => char.ToUpperInvariant(word[0]) + word[1..]));
-    }
-
-    private static string FormatLabelNullable(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) ? "—" : FormatLabel(value);
-    }
-
-    private static string FormatTipoDocumento(string? value)
-    {
-        return value switch
-        {
-            "Ine" => "INE",
-            "Curp" => "CURP",
-            "Rfc" => "RFC",
-            "Nss" => "NSS",
-            "ActaNacimiento" => "Acta de nacimiento",
-            "ComprobanteDomicilio" => "Comprobante de domicilio",
-            "Contrato" => "Contrato",
-            "CartaPolicia" => "Carta policía",
-            _ => FormatLabel(value)
-        };
-    }
-
-    private static string GetEstadoDocumentoColor(string estado)
-    {
-        return estado switch
-        {
-            "Vigente" => "#15803D",
-            "Cargado" => "#1D4ED8",
-            "Por vencer" => "#7C3AED",
-            "Vencido" => "#B91C1C",
-            "Pendiente" => "#B45309",
-            _ => "#475569"
-        };
     }
 
     private static string BuildFileName(string numEmpleado)
     {
-        var safeNumEmpleado = string.IsNullOrWhiteSpace(numEmpleado) ? "sin_numero" : numEmpleado.Trim();
-        return $"ficha_empleado_{safeNumEmpleado}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+        return CorporateReportFormatters.BuildTimestampedFileName(
+            "ficha_empleado",
+            "pdf",
+            CorporateReportFormatters.NormalizeFileSegment(numEmpleado, "sin_numero"));
     }
 
     private sealed class EmpleadoFichaViewModel

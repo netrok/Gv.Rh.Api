@@ -1,4 +1,5 @@
-﻿using ClosedXML.Excel;
+﻿using Gv.Rh.Application.Abstractions.Reports;
+using Gv.Rh.Application.DTOs.Audit;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
@@ -14,15 +15,19 @@ namespace Gv.Rh.Api.Controllers;
 public class AuditController : ControllerBase
 {
     private readonly RhDbContext _db;
+    private readonly IAuditReportService _auditReportService;
 
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = false
     };
 
-    public AuditController(RhDbContext db)
+    public AuditController(
+        RhDbContext db,
+        IAuditReportService auditReportService)
     {
         _db = db;
+        _auditReportService = auditReportService;
     }
 
     // GET /api/audit?entityName=Empleado&recordId=123&action=UPDATE&email=rrhh@rh.local&from=2026-03-01&to=2026-03-04&q=algo&page=1&pageSize=50
@@ -122,111 +127,30 @@ public class AuditController : ControllerBase
             item.RecordId,
             item.IpAddress,
             item.UserAgent,
-            item.OldValuesJson,
-            item.NewValuesJson,
-            item.ChangedColumnsJson
+            OldValuesJson = oldValuesJson,
+            NewValuesJson = newValuesJson,
+            ChangedColumnsJson = changedColumnsJson
         });
     }
 
-    // GET /api/audit/export.xlsx?from=...&to=...&entityName=...&action=...&email=...&q=...
+    // GET /api/audit/export.xlsx?entityName=...&recordId=...&action=...&email=...&from=...&to=...&q=...
     [HttpGet("export.xlsx")]
     public async Task<IActionResult> ExportXlsx(
-        [FromQuery] string? entityName = null,
-        [FromQuery] string? recordId = null,
-        [FromQuery] string? action = null,
-        [FromQuery] string? email = null,
-        [FromQuery] DateTime? from = null,
-        [FromQuery] DateTime? to = null,
-        [FromQuery] string? q = null)
+        [FromQuery] AuditReportQueryDto query,
+        CancellationToken cancellationToken)
     {
-        var query = ApplyFilters(
-                _db.AuditLogs.AsNoTracking(),
-                entityName,
-                recordId,
-                action,
-                email,
-                from,
-                to,
-                q)
-            .OrderByDescending(x => x.OccurredAtUtc)
-            .ThenByDescending(x => x.Id)
-            .Take(50000);
+        var report = await _auditReportService.BuildXlsxAsync(query, cancellationToken);
+        return File(report.Content, report.ContentType, report.FileName);
+    }
 
-        var rows = await query
-            .Select(x => new
-            {
-                x.Id,
-                x.OccurredAtUtc,
-                x.UserEmail,
-                x.UserRole,
-                x.Action,
-                x.EntityName,
-                x.RecordId,
-                x.IpAddress,
-                x.UserAgent,
-                x.OldValuesJson,
-                x.NewValuesJson,
-                x.ChangedColumnsJson
-            })
-            .ToListAsync();
-
-        using var wb = new XLWorkbook();
-        var ws = wb.Worksheets.Add("Audit");
-
-        var headers = new[]
-        {
-            "Id",
-            "OccurredAtUtc",
-            "UserEmail",
-            "UserRole",
-            "Action",
-            "EntityName",
-            "RecordId",
-            "IpAddress",
-            "UserAgent",
-            "OldValuesJson",
-            "NewValuesJson",
-            "ChangedColumnsJson"
-        };
-
-        for (int i = 0; i < headers.Length; i++)
-        {
-            ws.Cell(1, i + 1).Value = headers[i];
-            ws.Cell(1, i + 1).Style.Font.Bold = true;
-        }
-
-        var r = 2;
-        foreach (var x in rows)
-        {
-            ws.Cell(r, 1).Value = x.Id;
-            ws.Cell(r, 2).Value = x.OccurredAtUtc;
-            ws.Cell(r, 3).Value = x.UserEmail ?? "";
-            ws.Cell(r, 4).Value = x.UserRole ?? "";
-            ws.Cell(r, 5).Value = x.Action;
-            ws.Cell(r, 6).Value = x.EntityName;
-            ws.Cell(r, 7).Value = x.RecordId;
-            ws.Cell(r, 8).Value = x.IpAddress ?? "";
-            ws.Cell(r, 9).Value = x.UserAgent ?? "";
-            ws.Cell(r, 10).Value = x.OldValuesJson ?? "";
-            ws.Cell(r, 11).Value = x.NewValuesJson ?? "";
-            ws.Cell(r, 12).Value = x.ChangedColumnsJson ?? "";
-            r++;
-        }
-
-        ws.Column(2).Style.DateFormat.Format = "yyyy-mm-dd HH:mm:ss";
-        ws.SheetView.FreezeRows(1);
-        ws.Columns().AdjustToContents();
-
-        using var ms = new MemoryStream();
-        wb.SaveAs(ms);
-
-        var bytes = ms.ToArray();
-        var fileName = BuildAuditFileName(from, to, entityName, action);
-
-        return File(
-            bytes,
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            fileName);
+    // GET /api/audit/export.pdf?entityName=...&recordId=...&action=...&email=...&from=...&to=...&q=...
+    [HttpGet("export.pdf")]
+    public async Task<IActionResult> ExportPdf(
+        [FromQuery] AuditReportQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var report = await _auditReportService.BuildPdfAsync(query, cancellationToken);
+        return File(report.Content, report.ContentType, report.FileName);
     }
 
     private static IQueryable<AuditLog> ApplyFilters(
@@ -295,46 +219,12 @@ public class AuditController : ControllerBase
 
     private static DateTime ToUtcToInclusive(DateTime dt)
     {
-        var v = dt;
+        var value = dt;
 
         if (dt.TimeOfDay == TimeSpan.Zero)
-            v = dt.Date.AddDays(1).AddTicks(-1);
+            value = dt.Date.AddDays(1).AddTicks(-1);
 
-        return ToUtcFrom(v);
-    }
-
-    private static string BuildAuditFileName(DateTime? from, DateTime? to, string? entityName, string? action)
-    {
-        static string Safe(string? s)
-        {
-            if (string.IsNullOrWhiteSpace(s))
-                return "";
-
-            var t = s.Trim();
-            foreach (var c in Path.GetInvalidFileNameChars())
-                t = t.Replace(c, '_');
-
-            return t.Length > 40 ? t[..40] : t;
-        }
-
-        var parts = new List<string> { "audit" };
-
-        if (from.HasValue || to.HasValue)
-        {
-            var f = (from ?? DateTime.UtcNow).Date;
-            var t = (to ?? DateTime.UtcNow).Date;
-            parts.Add($"{f:yyyyMMdd}-{t:yyyyMMdd}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(entityName))
-            parts.Add(Safe(entityName));
-
-        if (!string.IsNullOrWhiteSpace(action))
-            parts.Add(Safe(action));
-
-        parts.Add(DateTime.UtcNow.ToString("yyyyMMdd_HHmmss"));
-
-        return string.Join("_", parts) + ".xlsx";
+        return ToUtcFrom(value);
     }
 
     private static string PrettyJsonOrOriginal(string json)
