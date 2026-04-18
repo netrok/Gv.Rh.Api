@@ -1,4 +1,5 @@
-﻿using Gv.Rh.Application.DTOs.Puestos;
+﻿using Gv.Rh.Application.Abstractions.Reports;
+using Gv.Rh.Application.DTOs.Puestos;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
@@ -13,10 +14,14 @@ namespace Gv.Rh.Api.Controllers;
 public class PuestosController : ControllerBase
 {
     private readonly RhDbContext _db;
+    private readonly IPuestosReportService _puestosReportService;
 
-    public PuestosController(RhDbContext db)
+    public PuestosController(
+        RhDbContext db,
+        IPuestosReportService puestosReportService)
     {
         _db = db;
+        _puestosReportService = puestosReportService;
     }
 
     [HttpGet]
@@ -114,6 +119,24 @@ public class PuestosController : ControllerBase
         return item is null
             ? NotFound(new { message = "Puesto no existe." })
             : Ok(item);
+    }
+
+    [HttpGet("export/xlsx")]
+    public async Task<IActionResult> ExportXlsx(
+        [FromQuery] PuestoReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var report = await _puestosReportService.BuildXlsxAsync(query, cancellationToken);
+        return File(report.Content, report.ContentType, report.FileName);
+    }
+
+    [HttpGet("export/pdf")]
+    public async Task<IActionResult> ExportPdf(
+        [FromQuery] PuestoReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var report = await _puestosReportService.BuildPdfAsync(query, cancellationToken);
+        return File(report.Content, report.ContentType, report.FileName);
     }
 
     [HttpPost]
@@ -251,10 +274,12 @@ public class PuestosController : ControllerBase
             .AnyAsync(x => x.PuestoId == puestoId);
 
         if (tieneEmpleados)
+        {
             return Conflict(new
             {
                 message = "No se puede desactivar el puesto porque tiene empleados relacionados."
             });
+        }
 
         return null;
     }

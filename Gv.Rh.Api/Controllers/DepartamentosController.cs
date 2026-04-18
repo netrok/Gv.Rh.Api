@@ -1,4 +1,5 @@
-﻿using Gv.Rh.Application.DTOs.Departamentos;
+﻿using Gv.Rh.Application.Abstractions.Reports;
+using Gv.Rh.Application.DTOs.Departamentos;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
@@ -13,10 +14,14 @@ namespace Gv.Rh.Api.Controllers;
 public class DepartamentosController : ControllerBase
 {
     private readonly RhDbContext _db;
+    private readonly IDepartamentosReportService _departamentosReportService;
 
-    public DepartamentosController(RhDbContext db)
+    public DepartamentosController(
+        RhDbContext db,
+        IDepartamentosReportService departamentosReportService)
     {
         _db = db;
+        _departamentosReportService = departamentosReportService;
     }
 
     [HttpGet]
@@ -101,6 +106,24 @@ public class DepartamentosController : ControllerBase
         return item is null
             ? NotFound(new { message = "Departamento no existe." })
             : Ok(item);
+    }
+
+    [HttpGet("export/xlsx")]
+    public async Task<IActionResult> ExportXlsx(
+        [FromQuery] DepartamentoReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var report = await _departamentosReportService.BuildXlsxAsync(query, cancellationToken);
+        return File(report.Content, report.ContentType, report.FileName);
+    }
+
+    [HttpGet("export/pdf")]
+    public async Task<IActionResult> ExportPdf(
+        [FromQuery] DepartamentoReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var report = await _departamentosReportService.BuildPdfAsync(query, cancellationToken);
+        return File(report.Content, report.ContentType, report.FileName);
     }
 
     [HttpPost]
@@ -220,20 +243,24 @@ public class DepartamentosController : ControllerBase
             .AnyAsync(x => x.DepartamentoId == departamentoId && x.Activo);
 
         if (tienePuestosActivos)
+        {
             return Conflict(new
             {
                 message = "No se puede desactivar el departamento porque tiene puestos activos relacionados."
             });
+        }
 
         var tieneEmpleados = await _db.Empleados
             .AsNoTracking()
             .AnyAsync(x => x.DepartamentoId == departamentoId);
 
         if (tieneEmpleados)
+        {
             return Conflict(new
             {
                 message = "No se puede desactivar el departamento porque tiene empleados relacionados."
             });
+        }
 
         return null;
     }

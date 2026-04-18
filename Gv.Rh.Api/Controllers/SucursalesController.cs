@@ -1,4 +1,6 @@
 ﻿using Gv.Rh.Api.DTOs.Sucursales;
+using Gv.Rh.Application.Abstractions.Reports;
+using Gv.Rh.Application.DTOs.Sucursales;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
@@ -13,10 +15,14 @@ namespace Gv.Rh.Api.Controllers;
 public class SucursalesController : ControllerBase
 {
     private readonly RhDbContext _context;
+    private readonly ISucursalesReportService _sucursalesReportService;
 
-    public SucursalesController(RhDbContext context)
+    public SucursalesController(
+        RhDbContext context,
+        ISucursalesReportService sucursalesReportService)
     {
         _context = context;
+        _sucursalesReportService = sucursalesReportService;
     }
 
     [HttpGet]
@@ -30,18 +36,16 @@ public class SucursalesController : ControllerBase
             .AsQueryable();
 
         if (activo.HasValue)
-        {
             query = query.Where(x => x.Activo == activo.Value);
-        }
 
         if (!string.IsNullOrWhiteSpace(q))
         {
             q = q.Trim();
             query = query.Where(x =>
-                x.Clave.Contains(q) ||
-                x.Nombre.Contains(q) ||
-                (x.Direccion != null && x.Direccion.Contains(q)) ||
-                (x.Telefono != null && x.Telefono.Contains(q)));
+                EF.Functions.ILike(x.Clave, $"%{q}%") ||
+                EF.Functions.ILike(x.Nombre, $"%{q}%") ||
+                (x.Direccion != null && EF.Functions.ILike(x.Direccion, $"%{q}%")) ||
+                (x.Telefono != null && EF.Functions.ILike(x.Telefono, $"%{q}%")));
         }
 
         var items = await query
@@ -84,6 +88,26 @@ public class SucursalesController : ControllerBase
             return NotFound();
 
         return Ok(item);
+    }
+
+    [HttpGet("export/xlsx")]
+    [Authorize(Roles = "ADMIN,RRHH")]
+    public async Task<IActionResult> ExportXlsx(
+        [FromQuery] SucursalReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var report = await _sucursalesReportService.BuildXlsxAsync(query, cancellationToken);
+        return File(report.Content, report.ContentType, report.FileName);
+    }
+
+    [HttpGet("export/pdf")]
+    [Authorize(Roles = "ADMIN,RRHH")]
+    public async Task<IActionResult> ExportPdf(
+        [FromQuery] SucursalReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var report = await _sucursalesReportService.BuildPdfAsync(query, cancellationToken);
+        return File(report.Content, report.ContentType, report.FileName);
     }
 
     [HttpPost]
