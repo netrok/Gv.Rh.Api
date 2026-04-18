@@ -200,6 +200,8 @@ else
     app.UseHttpsRedirection();
 }
 
+app.UseStaticFiles();
+
 app.UseCors(CorsPolicyName);
 
 app.UseAuthentication();

@@ -163,6 +163,40 @@ public class EmpleadosController : ControllerBase
             : Ok(dto);
     }
 
+    [AllowAnonymous]
+    [HttpGet("{id:int}/foto")]
+    public async Task<IActionResult> GetFoto(int id)
+    {
+        var empleado = await _db.Empleados
+            .AsNoTracking()
+            .Where(x => x.Id == id)
+            .Select(x => new
+            {
+                x.Id,
+                x.FotoRutaRelativa,
+                x.FotoMimeType
+            })
+            .FirstOrDefaultAsync();
+
+        if (empleado is null || string.IsNullOrWhiteSpace(empleado.FotoRutaRelativa))
+            return NotFound();
+
+        var webRoot = EnsureWebRootPath();
+        var physicalPath = Path.Combine(
+            webRoot,
+            empleado.FotoRutaRelativa.Replace('/', Path.DirectorySeparatorChar)
+        );
+
+        if (!System.IO.File.Exists(physicalPath))
+            return NotFound();
+
+        var contentType = string.IsNullOrWhiteSpace(empleado.FotoMimeType)
+            ? "application/octet-stream"
+            : empleado.FotoMimeType;
+
+        return PhysicalFile(physicalPath, contentType);
+    }
+
     [HttpGet("export/xlsx")]
     public async Task<IActionResult> ExportXlsx(
         [FromQuery] EmpleadosReporteQueryDto query,
@@ -633,7 +667,7 @@ public class EmpleadosController : ControllerBase
         {
             empleado.Id,
             empleado.NumEmpleado,
-            FotoUrl = BuildFotoUrl(empleado.FotoRutaRelativa),
+            FotoUrl = BuildFotoApiUrl(empleado.Id, empleado.FotoUpdatedAtUtc),
             empleado.FotoNombreOriginal,
             empleado.FotoMimeType,
             empleado.FotoTamanoBytes,
@@ -1054,7 +1088,9 @@ public class EmpleadosController : ControllerBase
             TipoBajaActual = empleado.TipoBajaActual,
             FechaReingresoActual = empleado.FechaReingresoActual,
             Recontratable = empleado.Recontratable,
-            FotoUrl = BuildFotoUrl(empleado.FotoRutaRelativa),
+            FotoUrl = !string.IsNullOrWhiteSpace(empleado.FotoRutaRelativa)
+                ? BuildFotoApiUrl(empleado.Id, empleado.FotoUpdatedAtUtc)
+                : null,
             TieneFoto = !string.IsNullOrWhiteSpace(empleado.FotoRutaRelativa),
             FotoNombreOriginal = empleado.FotoNombreOriginal,
             FotoMimeType = empleado.FotoMimeType,
@@ -1138,11 +1174,10 @@ public class EmpleadosController : ControllerBase
         return string.IsNullOrWhiteSpace(digits) ? null : digits;
     }
 
-    private static string? BuildFotoUrl(string? relativePath)
+    private static string BuildFotoApiUrl(int empleadoId, DateTime? updatedAtUtc)
     {
-        return string.IsNullOrWhiteSpace(relativePath)
-            ? null
-            : "/" + relativePath.Replace("\\", "/");
+        var version = (updatedAtUtc ?? DateTime.UtcNow).Ticks;
+        return $"/api/Empleados/{empleadoId}/foto?v={version}";
     }
 
     private string EnsureWebRootPath()
