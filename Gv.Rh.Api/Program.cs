@@ -186,6 +186,12 @@ builder.Services.Configure<MicrosoftGraphMailOptions>(
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<IEmailService, MicrosoftGraphEmailService>();
 
+// Notificaciones de expediente
+builder.Services.Configure<NotificationsOptions>(
+    builder.Configuration.GetSection(NotificationsOptions.SectionName));
+
+builder.Services.AddScoped<IExpedienteNotificationService, ExpedienteNotificationService>();
+
 // DbContext (PostgreSQL) + interceptor
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>
 {
