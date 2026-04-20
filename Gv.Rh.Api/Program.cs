@@ -177,6 +177,9 @@ builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteSer
 builder.Services.AddScoped<IEmpleadoNumberService, EmpleadoNumberService>();
 builder.Services.AddScoped<IEmpleadoImportService, EmpleadoImportService>();
 
+// Módulo Cumpleaños
+builder.Services.AddScoped<ICumpleaniosService, CumpleaniosService>();
+
 // DbContext (PostgreSQL) + interceptor
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>
 {
