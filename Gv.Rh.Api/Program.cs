@@ -3,6 +3,7 @@ using Gv.Rh.Api.Services;
 using Gv.Rh.Application.Abstractions.Reports;
 using Gv.Rh.Application.Interfaces;
 using Gv.Rh.Application.Interfaces.Reclutamiento;
+using Gv.Rh.Infrastructure.Options;
 using Gv.Rh.Infrastructure.Persistence;
 using Gv.Rh.Infrastructure.Reports;
 using Gv.Rh.Infrastructure.Services;
@@ -142,13 +143,10 @@ builder.Services
         {
             ValidateIssuer = true,
             ValidIssuer = issuer,
-
             ValidateAudience = true,
             ValidAudience = audience,
-
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = signingKey,
-
             ValidateLifetime = true,
             ClockSkew = TimeSpan.Zero
         };
@@ -179,6 +177,14 @@ builder.Services.AddScoped<IEmpleadoImportService, EmpleadoImportService>();
 
 // Módulo Cumpleaños
 builder.Services.AddScoped<ICumpleaniosService, CumpleaniosService>();
+builder.Services.AddScoped<ICumpleaniosNotificationService, CumpleaniosNotificationService>();
+
+// Correo Microsoft 365 / Graph
+builder.Services.Configure<MicrosoftGraphMailOptions>(
+    builder.Configuration.GetSection(MicrosoftGraphMailOptions.SectionName));
+
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<IEmailService, MicrosoftGraphEmailService>();
 
 // DbContext (PostgreSQL) + interceptor
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>
@@ -204,16 +210,10 @@ else
 }
 
 app.UseStaticFiles();
-
 app.UseCors(CorsPolicyName);
-
 app.UseAuthentication();
-
-// Bloquea el sistema hasta cambiar password si MustChangePassword = true
 app.UseMiddleware<ForcePasswordChangeMiddleware>();
-
 app.UseAuthorization();
-
 app.MapControllers();
 
 // Migraciones + seed + cleanup (antes de arrancar)

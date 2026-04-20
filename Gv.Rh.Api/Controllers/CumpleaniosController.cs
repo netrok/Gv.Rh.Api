@@ -1,4 +1,5 @@
-﻿using Gv.Rh.Application.Interfaces;
+﻿using Gv.Rh.Application.DTOs.Cumpleanios;
+using Gv.Rh.Application.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,10 +11,14 @@ namespace Gv.Rh.Api.Controllers;
 public sealed class CumpleaniosController : ControllerBase
 {
     private readonly ICumpleaniosService _cumpleaniosService;
+    private readonly ICumpleaniosNotificationService _cumpleaniosNotificationService;
 
-    public CumpleaniosController(ICumpleaniosService cumpleaniosService)
+    public CumpleaniosController(
+        ICumpleaniosService cumpleaniosService,
+        ICumpleaniosNotificationService cumpleaniosNotificationService)
     {
         _cumpleaniosService = cumpleaniosService;
+        _cumpleaniosNotificationService = cumpleaniosNotificationService;
     }
 
     [HttpGet("hoy")]
@@ -95,5 +100,25 @@ public sealed class CumpleaniosController : ControllerBase
             cancellationToken);
 
         return Ok(result);
+    }
+
+    [HttpPost("notificar-hoy")]
+    public async Task<IActionResult> NotificarHoy(
+        [FromBody] EnviarCumpleaniosHoyRequestDto? request,
+        CancellationToken cancellationToken)
+    {
+        var incluirEdad = request?.IncluirEdad ?? true;
+
+        var total = await _cumpleaniosNotificationService.EnviarCumpleaniosHoyAsync(
+            incluirEdad,
+            cancellationToken);
+
+        return Ok(new
+        {
+            enviados = total,
+            mensaje = total > 0
+                ? $"Se envió la notificación con {total} cumpleaños."
+                : "Hoy no hay cumpleaños para notificar."
+        });
     }
 }
