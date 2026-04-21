@@ -1,9 +1,14 @@
-﻿using System.Net;
+﻿using System.Linq;
+using System.Net;
+using System.Security.Claims;
 using System.Text;
+using System.Text.Json;
 using Gv.Rh.Application.DTOs.EmpleadosDocumentos;
 using Gv.Rh.Application.Interfaces;
+using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Options;
 using Gv.Rh.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -16,17 +21,20 @@ public sealed class ExpedienteNotificationService : IExpedienteNotificationServi
     private readonly IEmailService _emailService;
     private readonly NotificationsOptions _options;
     private readonly ILogger<ExpedienteNotificationService> _logger;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
     public ExpedienteNotificationService(
         RhDbContext dbContext,
         IEmailService emailService,
         IOptions<NotificationsOptions> options,
-        ILogger<ExpedienteNotificationService> logger)
+        ILogger<ExpedienteNotificationService> logger,
+        IHttpContextAccessor httpContextAccessor)
     {
         _dbContext = dbContext;
         _emailService = emailService;
         _options = options.Value;
         _logger = logger;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<DocumentoVencimientoResumenDto> ObtenerResumenAsync(
@@ -132,19 +140,152 @@ public sealed class ExpedienteNotificationService : IExpedienteNotificationServi
         var subject = $"[GV RH] Documentos por vencer/vencidos - {resumen.FechaCorte:yyyy-MM-dd}";
         var html = BuildHtml(resumen);
 
-        await _emailService.SendAsync(
-            _options.ExpedienteRecipients,
-            subject: subject,
-            htmlBody: html,
-            cancellationToken: cancellationToken);
+        try
+        {
+            await _emailService.SendAsync(
+                _options.ExpedienteRecipients,
+                subject: subject,
+                htmlBody: html,
+                cancellationToken: cancellationToken);
 
-        _logger.LogInformation(
-            "Resumen de expediente enviado. Por vencer: {PorVencer}. Vencidos: {Vencidos}. Destinatarios: {Destinatarios}",
-            resumen.TotalPorVencer,
-            resumen.TotalVencidos,
-            string.Join(", ", _options.ExpedienteRecipients));
+            await RegistrarAuditoriaAsync(
+                resumen,
+                status: "SUCCESS",
+                error: null,
+                cancellationToken: cancellationToken);
 
-        return resumen.TotalPorVencer + resumen.TotalVencidos;
+            _logger.LogInformation(
+                "Resumen de expediente enviado. Por vencer: {PorVencer}. Vencidos: {Vencidos}. Destinatarios: {Destinatarios}",
+                resumen.TotalPorVencer,
+                resumen.TotalVencidos,
+                string.Join(", ", _options.ExpedienteRecipients));
+
+            return resumen.TotalPorVencer + resumen.TotalVencidos;
+        }
+        catch (Exception ex)
+        {
+            await RegistrarAuditoriaAsync(
+                resumen,
+                status: "ERROR",
+                error: ex.Message,
+                cancellationToken: cancellationToken);
+
+            _logger.LogError(ex, "Error enviando resumen de vencimientos de expediente.");
+            throw;
+        }
+    }
+
+    private async Task RegistrarAuditoriaAsync(
+        DocumentoVencimientoResumenDto resumen,
+        string status,
+        string? error,
+        CancellationToken cancellationToken)
+    {
+        var contexto = ObtenerContextoAuditoria();
+        var esManual = contexto.HttpContextDisponible;
+
+        var action = status == "SUCCESS"
+            ? (esManual ? "EXPEDIENTE_NOTIFY_MANUAL" : "EXPEDIENTE_NOTIFY_SCHEDULER")
+            : (esManual ? "EXPEDIENTE_NOTIFY_MANUAL_ERROR" : "EXPEDIENTE_NOTIFY_SCHEDULER_ERROR");
+
+        var payload = new
+        {
+            origen = esManual ? "MANUAL" : "SCHEDULER",
+            status,
+            fechaCorte = resumen.FechaCorte.ToString("yyyy-MM-dd"),
+            diasAnticipacion = resumen.DiasAnticipacion,
+            totalPorVencer = resumen.TotalPorVencer,
+            totalVencidos = resumen.TotalVencidos,
+            totalNotificados = resumen.TotalPorVencer + resumen.TotalVencidos,
+            destinatarios = _options.ExpedienteRecipients,
+            error
+        };
+
+        var changedColumns = new[]
+        {
+            "origen",
+            "status",
+            "fechaCorte",
+            "diasAnticipacion",
+            "totalPorVencer",
+            "totalVencidos",
+            "totalNotificados",
+            "destinatarios",
+            "error"
+        };
+
+        var audit = new AuditLog
+        {
+            OccurredAtUtc = DateTime.UtcNow,
+            UserId = null,
+            UserEmail = contexto.UserEmail,
+            UserRole = contexto.UserRole,
+            Action = action,
+            EntityName = "ExpedienteNotificaciones",
+            RecordId = string.Empty,
+            IpAddress = contexto.IpAddress ?? string.Empty,
+            UserAgent = contexto.UserAgent ?? string.Empty,
+            OldValuesJson = string.Empty,
+            NewValuesJson = JsonSerializer.Serialize(payload) ?? "{}",
+            ChangedColumnsJson = JsonSerializer.Serialize(changedColumns) ?? "[]"
+        };
+
+        _dbContext.AuditLogs.Add(audit);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private AuditContext ObtenerContextoAuditoria()
+    {
+        var httpContext = _httpContextAccessor.HttpContext;
+
+        if (httpContext is null)
+        {
+            return new AuditContext
+            {
+                HttpContextDisponible = false,
+                UserEmail = "system@gv-rh.local",
+                UserRole = "SYSTEM",
+                IpAddress = null,
+                UserAgent = "BackgroundService/ExpedienteNotificationHostedService"
+            };
+        }
+
+        var user = httpContext.User;
+
+        return new AuditContext
+        {
+            HttpContextDisponible = true,
+            UserEmail = GetFirstClaimValue(
+                user,
+                ClaimTypes.Email,
+                "email",
+                "emails")
+                ?? user.Identity?.Name
+                ?? "usuario-desconocido@gv-rh.local",
+            UserRole = GetFirstClaimValue(
+                user,
+                ClaimTypes.Role,
+                "role",
+                "roles",
+                "http://schemas.microsoft.com/ws/2008/06/identity/claims/role")
+                ?? "SIN_ROL",
+            IpAddress = httpContext.Connection.RemoteIpAddress?.ToString(),
+            UserAgent = httpContext.Request.Headers.UserAgent.ToString()
+        };
+    }
+
+    private static string? GetFirstClaimValue(ClaimsPrincipal user, params string[] claimTypes)
+    {
+        foreach (var claimType in claimTypes)
+        {
+            var value = user.Claims.FirstOrDefault(c => c.Type == claimType)?.Value;
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
     }
 
     private static int NormalizarDiasAnticipacion(int diasAnticipacion)
@@ -304,4 +445,13 @@ public sealed class ExpedienteNotificationService : IExpedienteNotificationServi
 
     private static string FormatDate(DateOnly? value)
         => value.HasValue ? value.Value.ToString("yyyy-MM-dd") : "-";
+
+    private sealed class AuditContext
+    {
+        public bool HttpContextDisponible { get; set; }
+        public string UserEmail { get; set; } = string.Empty;
+        public string UserRole { get; set; } = string.Empty;
+        public string? IpAddress { get; set; }
+        public string? UserAgent { get; set; }
+    }
 }
