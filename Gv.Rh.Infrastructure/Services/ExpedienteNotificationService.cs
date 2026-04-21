@@ -225,7 +225,7 @@ public sealed class ExpedienteNotificationService : IExpedienteNotificationServi
             RecordId = string.Empty,
             IpAddress = contexto.IpAddress ?? string.Empty,
             UserAgent = contexto.UserAgent ?? string.Empty,
-            OldValuesJson = string.Empty,
+            OldValuesJson = "null",
             NewValuesJson = JsonSerializer.Serialize(payload) ?? "{}",
             ChangedColumnsJson = JsonSerializer.Serialize(changedColumns) ?? "[]"
         };
