@@ -10,41 +10,66 @@ namespace Gv.Rh.Api.Controllers;
 [Authorize(Roles = "ADMIN,RRHH")]
 public sealed class ExpedienteNotificacionesController : ControllerBase
 {
-    private readonly IExpedienteNotificationService _expedienteNotificationService;
+    private readonly IExpedienteNotificationService _service;
 
-    public ExpedienteNotificacionesController(
-        IExpedienteNotificationService expedienteNotificationService)
+    public ExpedienteNotificacionesController(IExpedienteNotificationService service)
     {
-        _expedienteNotificationService = expedienteNotificationService;
+        _service = service;
     }
 
-    [HttpPost("documentos-por-vencer")]
-    public async Task<IActionResult> NotificarDocumentosPorVencer(
-        [FromBody] NotificarDocumentosPorVencerRequestDto? request,
-        CancellationToken cancellationToken)
+    [HttpGet("preview")]
+    [ProducesResponseType(typeof(DocumentoVencimientoResumenDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<DocumentoVencimientoResumenDto>> Preview(
+        [FromQuery] int diasAnticipacion = 30,
+        [FromQuery] bool incluirVencidos = true,
+        CancellationToken cancellationToken = default)
     {
-        var diasAnticipacion = request?.DiasAnticipacion ?? 15;
+        diasAnticipacion = NormalizarDiasAnticipacion(diasAnticipacion);
 
-        if (diasAnticipacion < 1)
-        {
-            diasAnticipacion = 1;
-        }
+        var result = await _service.ObtenerResumenAsync(
+            diasAnticipacion,
+            incluirVencidos,
+            cancellationToken);
 
-        if (diasAnticipacion > 365)
-        {
-            diasAnticipacion = 365;
-        }
+        return Ok(result);
+    }
 
-        var total = await _expedienteNotificationService
-            .NotificarDocumentosPorVencerAsync(diasAnticipacion, cancellationToken);
+    [HttpPost("notificar-vencimientos")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult<object>> NotificarVencimientos(
+        [FromBody] NotificarDocumentosPorVencerRequestDto? request,
+        CancellationToken cancellationToken = default)
+    {
+        var diasAnticipacion = NormalizarDiasAnticipacion(
+            request?.DiasAnticipacion ?? 30);
+
+        var incluirVencidos = request?.IncluirVencidos ?? true;
+
+        var enviados = await _service.EnviarResumenAsync(
+            diasAnticipacion,
+            incluirVencidos,
+            cancellationToken);
 
         return Ok(new
         {
-            enviados = total,
+            ok = true,
+            enviados,
             diasAnticipacion,
-            mensaje = total > 0
-                ? $"Se notificaron {total} documento(s) próximos a vencer."
-                : "No se encontraron documentos por vencer en el rango solicitado."
+            incluirVencidos,
+            mensaje = enviados > 0
+                ? $"Se enviaron notificaciones para {enviados} documento(s)."
+                : "No se encontraron documentos por vencer o vencidos para notificar."
         });
+    }
+
+    private static int NormalizarDiasAnticipacion(int diasAnticipacion)
+    {
+        if (diasAnticipacion < 1)
+            return 1;
+
+        if (diasAnticipacion > 365)
+            return 365;
+
+        return diasAnticipacion;
     }
 }

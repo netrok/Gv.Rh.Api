@@ -119,8 +119,7 @@ builder.Services.AddCors(opt =>
 var jwt = builder.Configuration.GetSection("Jwt");
 
 var key = jwt["Key"] ?? throw new InvalidOperationException(
-    "Falta Jwt:Key. Configúralo con User Secrets (DEV) o variables de entorno (PROD)."
-);
+    "Falta Jwt:Key. Configúralo con User Secrets (DEV) o variables de entorno (PROD).");
 
 var issuer = jwt["Issuer"] ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
 var audience = jwt["Audience"] ?? throw new InvalidOperationException("Falta Jwt:Audience.");
@@ -191,6 +190,7 @@ builder.Services.Configure<NotificationsOptions>(
     builder.Configuration.GetSection(NotificationsOptions.SectionName));
 
 builder.Services.AddScoped<IExpedienteNotificationService, ExpedienteNotificationService>();
+builder.Services.AddHostedService<ExpedienteNotificationHostedService>();
 
 // DbContext (PostgreSQL) + interceptor
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>
