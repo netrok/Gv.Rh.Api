@@ -152,7 +152,7 @@ public static class CorporatePdfStyles
             .Border(1)
             .BorderColor(borderColor)
             .CornerRadius(8)
-            .Padding(11);
+            .Padding(8);
     }
 
     public static IContainer FooterText(this IContainer container)

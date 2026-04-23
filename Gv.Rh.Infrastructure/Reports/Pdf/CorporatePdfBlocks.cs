@@ -275,24 +275,24 @@ public static class CorporatePdfBlocks
     {
         container.KpiCard().Column(column =>
         {
-            column.Spacing(4);
+            column.Spacing(2);
 
             column.Item().AccentBar(accentColor);
 
-            column.Item().PaddingTop(4).Text(title.Trim())
-                .FontSize(10)
+            column.Item().PaddingTop(3).Text(title.Trim())
+                .FontSize(8.5f)
                 .SemiBold()
                 .FontColor(CorporateReportPalette.Ink600);
 
             column.Item().Text(string.IsNullOrWhiteSpace(value) ? "No registrado" : value.Trim())
-                .FontSize(18.5f)
+                .FontSize(12.5f)
                 .Bold()
                 .FontColor(accentColor);
 
             if (!string.IsNullOrWhiteSpace(subtitle))
             {
                 column.Item().Text(subtitle.Trim())
-                    .FontSize(8.5f)
+                    .FontSize(7.6f)
                     .FontColor(CorporateReportPalette.Ink500);
             }
         });

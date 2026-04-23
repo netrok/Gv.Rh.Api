@@ -400,12 +400,30 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
 
     private static void ComposeSummarySection(IContainer container, EmpleadoFichaViewModel empleado)
     {
-        CorporatePdfBlocks.ComposeKpiRow(
-            container,
-            ("Puesto", CorporateReportFormatters.NullSafe(empleado.Puesto), "Posición vigente", CorporateReportPalette.KpiWarning),
-            ("Departamento", CorporateReportFormatters.NullSafe(empleado.Departamento), "Área organizacional", CorporateReportPalette.KpiPrimary),
-            ("Sucursal", CorporateReportFormatters.NullSafe(empleado.Sucursal), "Centro de trabajo actual", CorporateReportPalette.KpiPurple),
-            ("Ingreso", CorporateReportFormatters.FormatDate(empleado.FechaIngreso), "Fecha de alta", CorporateReportPalette.KpiTeal));
+        container.Row(row =>
+        {
+            row.Spacing(10);
+
+            row.RelativeItem(1.05f).Element(card =>
+                CorporatePdfBlocks.ComposeKpiRow(
+                    card,
+                    ("Puesto", CorporateReportFormatters.NullSafe(empleado.Puesto), "Posición vigente", CorporateReportPalette.KpiWarning)));
+
+            row.RelativeItem(1.0f).Element(card =>
+                CorporatePdfBlocks.ComposeKpiRow(
+                    card,
+                    ("Departamento", CorporateReportFormatters.NullSafe(empleado.Departamento), "Área organizacional", CorporateReportPalette.KpiPrimary)));
+
+            row.RelativeItem(1.2f).Element(card =>
+                CorporatePdfBlocks.ComposeKpiRow(
+                    card,
+                    ("Sucursal", CorporateReportFormatters.NullSafe(empleado.Sucursal), "Centro de trabajo actual", CorporateReportPalette.KpiPurple)));
+
+            row.RelativeItem(0.95f).Element(card =>
+                CorporatePdfBlocks.ComposeKpiRow(
+                    card,
+                    ("Ingreso", CorporateReportFormatters.FormatDate(empleado.FechaIngreso), "Fecha de alta", CorporateReportPalette.KpiTeal)));
+        });
     }
 
     private static void ComposeGeneralDataSection(IContainer container, EmpleadoFichaViewModel empleado)
