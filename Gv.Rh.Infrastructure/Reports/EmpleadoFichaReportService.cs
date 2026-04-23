@@ -288,6 +288,18 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
         empleado.DocumentosVencidos = vencidos;
     }
 
+    private static string FormatInteriorValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "No aplica";
+
+        var trimmed = value.Trim();
+
+        return trimmed == "0"
+            ? "No aplica"
+            : trimmed;
+    }
+
     private static void ComposeIdentitySection(IContainer container, EmpleadoFichaViewModel empleado)
     {
         CorporatePdfBlocks.ComposeSection(container, "Resumen laboral", body =>
@@ -379,7 +391,7 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
 
     private static void ComposeGeneralDataSection(IContainer container, EmpleadoFichaViewModel empleado)
     {
-        CorporatePdfBlocks.ComposeSection(container, "Datos personales", body =>
+        CorporatePdfBlocks.ComposeSection(container, "Nacimiento y contacto", body =>
         {
             body.Item().Row(row =>
             {
@@ -455,7 +467,7 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                 {
                     right.Spacing(4);
                     CorporatePdfBlocks.ComposeLabeledField(right, "Número exterior", CorporateReportFormatters.NullSafe(empleado.DireccionNumeroExterior));
-                    CorporatePdfBlocks.ComposeLabeledField(right, "Número interior", CorporateReportFormatters.NullSafe(empleado.DireccionNumeroInterior));
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Número interior", FormatInteriorValue(empleado.DireccionNumeroInterior));
                     CorporatePdfBlocks.ComposeLabeledField(right, "Código postal", CorporateReportFormatters.NullSafe(empleado.DireccionCodigoPostal));
                 });
             });
@@ -464,26 +476,31 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
 
     private static void ComposeEmergencyContactSection(IContainer container, EmpleadoFichaViewModel empleado)
     {
-        CorporatePdfBlocks.ComposeSection(container, "Contacto de emergencia", body =>
-        {
-            body.Item().Row(row =>
+        container
+            .ShowEntire()
+            .Element(sectionContainer =>
             {
-                row.Spacing(14);
-
-                row.RelativeItem().Column(left =>
+                CorporatePdfBlocks.ComposeSection(sectionContainer, "Contacto de emergencia", body =>
                 {
-                    left.Spacing(4);
-                    CorporatePdfBlocks.ComposeLabeledField(left, "Nombre", CorporateReportFormatters.NullSafe(empleado.ContactoEmergenciaNombre));
-                    CorporatePdfBlocks.ComposeLabeledField(left, "Parentesco", CorporateReportFormatters.NullSafe(empleado.ContactoEmergenciaParentesco));
-                });
+                    body.Item().Row(row =>
+                    {
+                        row.Spacing(14);
 
-                row.RelativeItem().Column(right =>
-                {
-                    right.Spacing(4);
-                    CorporatePdfBlocks.ComposeLabeledField(right, "Teléfono", CorporateReportFormatters.NullSafe(empleado.ContactoEmergenciaTelefono));
+                        row.RelativeItem().Column(left =>
+                        {
+                            left.Spacing(4);
+                            CorporatePdfBlocks.ComposeLabeledField(left, "Nombre", CorporateReportFormatters.NullSafe(empleado.ContactoEmergenciaNombre));
+                            CorporatePdfBlocks.ComposeLabeledField(left, "Parentesco", CorporateReportFormatters.NullSafe(empleado.ContactoEmergenciaParentesco));
+                        });
+
+                        row.RelativeItem().Column(right =>
+                        {
+                            right.Spacing(4);
+                            CorporatePdfBlocks.ComposeLabeledField(right, "Teléfono", CorporateReportFormatters.NullSafe(empleado.ContactoEmergenciaTelefono));
+                        });
+                    });
                 });
             });
-        });
     }
 
     private static void ComposeLaborSection(IContainer container, EmpleadoFichaViewModel empleado)
