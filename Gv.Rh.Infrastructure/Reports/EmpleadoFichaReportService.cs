@@ -150,7 +150,6 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                     column.Spacing(10);
 
                     column.Item().Element(container => ComposeIdentitySection(container, empleado));
-                    column.Item().Element(container => ComposeSummarySection(container, empleado));
                     column.Item().Element(container => ComposeGeneralDataSection(container, empleado));
                     column.Item().Element(container => ComposeOfficialDataSection(container, empleado));
                     column.Item().Element(container => ComposeAddressSection(container, empleado));
@@ -291,7 +290,7 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
 
     private static void ComposeIdentitySection(IContainer container, EmpleadoFichaViewModel empleado)
     {
-        CorporatePdfBlocks.ComposeSection(container, "Identificación general", body =>
+        CorporatePdfBlocks.ComposeSection(container, "Resumen laboral", body =>
         {
             body.Item().Row(row =>
             {
@@ -300,14 +299,6 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                 row.RelativeItem(3).Column(left =>
                 {
                     left.Spacing(6);
-
-                    left.Item().Text(CorporateReportFormatters.CombineFullName(
-                            empleado.Nombres,
-                            empleado.ApellidoPaterno,
-                            empleado.ApellidoMaterno))
-                        .FontSize(15)
-                        .SemiBold()
-                        .FontColor(CorporateReportPalette.Ink900);
 
                     left.Item().Row(chips =>
                     {
@@ -319,13 +310,6 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                                 "Estatus",
                                 CorporateReportFormatters.FormatLabel(empleado.EstatusLaboralActual),
                                 CorporateReportPalette.GetEmpleadoStatusAccent(empleado.EstatusLaboralActual)));
-
-                        chips.RelativeItem().Element(c =>
-                            CorporatePdfBlocks.ComposeStatusChip(
-                                c,
-                                "Activo",
-                                CorporateReportFormatters.FormatBool(empleado.Activo),
-                                CorporateReportPalette.GetBooleanAccent(empleado.Activo)));
                     });
 
                     left.Item().Row(fields =>
@@ -345,7 +329,6 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                             col.Spacing(4);
                             CorporatePdfBlocks.ComposeLabeledField(col, "Sucursal", CorporateReportFormatters.NullSafe(empleado.Sucursal));
                             CorporatePdfBlocks.ComposeLabeledField(col, "Fecha de ingreso", CorporateReportFormatters.FormatDate(empleado.FechaIngreso));
-                            CorporatePdfBlocks.ComposeLabeledField(col, "Correo", CorporateReportFormatters.NullSafe(empleado.Email));
                         });
                     });
                 });
@@ -391,44 +374,12 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                         .FontColor(CorporateReportPalette.Ink500)
                         .AlignCenter();
                 });
-
-                column.Item().AlignCenter().Text(CorporateReportFormatters.NullSafe(empleado.NumEmpleado))
-                    .FontSize(7.8f)
-                    .FontColor(CorporateReportPalette.Ink500);
             });
-    }
-
-    private static void ComposeSummarySection(IContainer container, EmpleadoFichaViewModel empleado)
-    {
-        container.Row(row =>
-        {
-            row.Spacing(10);
-
-            row.RelativeItem(1.05f).Element(card =>
-                CorporatePdfBlocks.ComposeKpiRow(
-                    card,
-                    ("Puesto", CorporateReportFormatters.NullSafe(empleado.Puesto), "Posición vigente", CorporateReportPalette.KpiWarning)));
-
-            row.RelativeItem(1.0f).Element(card =>
-                CorporatePdfBlocks.ComposeKpiRow(
-                    card,
-                    ("Departamento", CorporateReportFormatters.NullSafe(empleado.Departamento), "Área organizacional", CorporateReportPalette.KpiPrimary)));
-
-            row.RelativeItem(1.2f).Element(card =>
-                CorporatePdfBlocks.ComposeKpiRow(
-                    card,
-                    ("Sucursal", CorporateReportFormatters.NullSafe(empleado.Sucursal), "Centro de trabajo actual", CorporateReportPalette.KpiPurple)));
-
-            row.RelativeItem(0.95f).Element(card =>
-                CorporatePdfBlocks.ComposeKpiRow(
-                    card,
-                    ("Ingreso", CorporateReportFormatters.FormatDate(empleado.FechaIngreso), "Fecha de alta", CorporateReportPalette.KpiTeal)));
-        });
     }
 
     private static void ComposeGeneralDataSection(IContainer container, EmpleadoFichaViewModel empleado)
     {
-        CorporatePdfBlocks.ComposeSection(container, "Datos generales", body =>
+        CorporatePdfBlocks.ComposeSection(container, "Datos personales", body =>
         {
             body.Item().Row(row =>
             {
@@ -437,16 +388,13 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                 row.RelativeItem().Column(left =>
                 {
                     left.Spacing(4);
-                    CorporatePdfBlocks.ComposeLabeledField(left, "Nombres", CorporateReportFormatters.NullSafe(empleado.Nombres));
-                    CorporatePdfBlocks.ComposeLabeledField(left, "Apellido paterno", CorporateReportFormatters.NullSafe(empleado.ApellidoPaterno));
-                    CorporatePdfBlocks.ComposeLabeledField(left, "Apellido materno", CorporateReportFormatters.NullSafe(empleado.ApellidoMaterno));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Fecha de nacimiento", CorporateReportFormatters.FormatDateNullable(empleado.FechaNacimiento));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Teléfono", CorporateReportFormatters.NullSafe(empleado.Telefono));
                 });
 
                 row.RelativeItem().Column(right =>
                 {
                     right.Spacing(4);
-                    CorporatePdfBlocks.ComposeLabeledField(right, "Fecha de nacimiento", CorporateReportFormatters.FormatDateNullable(empleado.FechaNacimiento));
-                    CorporatePdfBlocks.ComposeLabeledField(right, "Teléfono", CorporateReportFormatters.NullSafe(empleado.Telefono));
                     CorporatePdfBlocks.ComposeLabeledField(right, "Correo", CorporateReportFormatters.NullSafe(empleado.Email));
                 });
             });
@@ -559,7 +507,6 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                     right.Spacing(4);
                     CorporatePdfBlocks.ComposeLabeledField(right, "Fecha de reingreso actual", CorporateReportFormatters.FormatDateNullable(empleado.FechaReingresoActual));
                     CorporatePdfBlocks.ComposeLabeledField(right, "Recontratable", CorporateReportFormatters.FormatBoolNullable(empleado.Recontratable));
-                    CorporatePdfBlocks.ComposeLabeledField(right, "Activo", CorporateReportFormatters.FormatBool(empleado.Activo));
                 });
             });
         });
