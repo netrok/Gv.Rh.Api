@@ -4,6 +4,7 @@ using Gv.Rh.Domain.Common;
 using Gv.Rh.Infrastructure.Persistence;
 using Gv.Rh.Infrastructure.Reports.Common;
 using Gv.Rh.Infrastructure.Reports.Pdf;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
@@ -15,6 +16,7 @@ namespace Gv.Rh.Infrastructure.Reports;
 public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
 {
     private readonly RhDbContext _context;
+    private readonly IWebHostEnvironment _environment;
 
     private static readonly TipoDocumentoEmpleado[] RequiredTipos =
     [
@@ -28,9 +30,10 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
         TipoDocumentoEmpleado.CartaPolicia
     ];
 
-    public EmpleadoFichaReportService(RhDbContext context)
+    public EmpleadoFichaReportService(RhDbContext context, IWebHostEnvironment environment)
     {
         _context = context;
+        _environment = environment;
     }
 
     public async Task<ReportFileDto> BuildPdfAsync(int empleadoId, CancellationToken cancellationToken)
@@ -58,21 +61,48 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                 TipoBajaActual = x.TipoBajaActual != null ? x.TipoBajaActual.ToString() : null,
                 FechaReingresoActual = x.FechaReingresoActual,
                 Recontratable = x.Recontratable,
+
                 Sucursal = x.Sucursal != null ? x.Sucursal.Nombre : null,
                 Departamento = x.Departamento != null ? x.Departamento.Nombre : null,
-                Puesto = x.Puesto != null ? x.Puesto.Nombre : null
+                Puesto = x.Puesto != null ? x.Puesto.Nombre : null,
+
+                Curp = x.Curp,
+                Rfc = x.Rfc,
+                Nss = x.Nss,
+                Sexo = x.Sexo.ToString(),
+                EstadoCivil = x.EstadoCivil.ToString(),
+                Nacionalidad = x.Nacionalidad,
+
+                DireccionCalle = x.DireccionCalle,
+                DireccionNumeroExterior = x.DireccionNumeroExterior,
+                DireccionNumeroInterior = x.DireccionNumeroInterior,
+                DireccionColonia = x.DireccionColonia,
+                DireccionCiudad = x.DireccionCiudad,
+                DireccionEstado = x.DireccionEstado,
+                DireccionCodigoPostal = x.DireccionCodigoPostal,
+                CodigoPostalFiscal = x.CodigoPostalFiscal,
+
+                ContactoEmergenciaNombre = x.ContactoEmergenciaNombre,
+                ContactoEmergenciaTelefono = x.ContactoEmergenciaTelefono,
+                ContactoEmergenciaParentesco = x.ContactoEmergenciaParentesco,
+
+                FotoNombreOriginal = x.FotoNombreOriginal,
+                FotoRutaRelativa = x.FotoRutaRelativa,
+                FotoMimeType = x.FotoMimeType,
+                FotoUpdatedAtUtc = x.FotoUpdatedAtUtc
             })
             .FirstOrDefaultAsync(cancellationToken);
 
         if (empleado is null)
             throw new InvalidOperationException("No se encontró el empleado solicitado.");
 
+        empleado.FotoBytes = LoadEmployeePhotoBytes(empleado.FotoRutaRelativa);
+
         var movimientos = await _context.EmpleadoMovimientosLaborales
             .AsNoTracking()
             .Where(x => x.EmpleadoId == empleadoId)
             .OrderByDescending(x => x.FechaMovimiento)
             .ThenByDescending(x => x.CreatedAtUtc)
-            .Take(5)
             .Select(x => new EmpleadoFichaMovimientoViewModel
             {
                 TipoMovimiento = x.TipoMovimiento.ToString(),
@@ -119,9 +149,12 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                 {
                     column.Spacing(10);
 
-                    column.Item().Element(container => ComposeOverviewSection(container, empleado));
+                    column.Item().Element(container => ComposeIdentitySection(container, empleado));
                     column.Item().Element(container => ComposeSummarySection(container, empleado));
-                    column.Item().Element(container => ComposePersonalDataSection(container, empleado));
+                    column.Item().Element(container => ComposeGeneralDataSection(container, empleado));
+                    column.Item().Element(container => ComposeOfficialDataSection(container, empleado));
+                    column.Item().Element(container => ComposeAddressSection(container, empleado));
+                    column.Item().Element(container => ComposeEmergencyContactSection(container, empleado));
                     column.Item().Element(container => ComposeLaborSection(container, empleado));
                     column.Item().Element(container => ComposeHistorySection(container, empleado.Movimientos));
                     column.Item().Element(container => ComposeDocumentsSection(container, empleado));
@@ -138,6 +171,34 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
             ContentType = "application/pdf",
             FileName = BuildFileName(empleado.NumEmpleado)
         };
+    }
+
+    private byte[]? LoadEmployeePhotoBytes(string? fotoRutaRelativa)
+    {
+        if (string.IsNullOrWhiteSpace(fotoRutaRelativa))
+            return null;
+
+        var webRoot = _environment.WebRootPath;
+        if (string.IsNullOrWhiteSpace(webRoot))
+            webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+
+        var normalizedRelativePath = fotoRutaRelativa
+            .Replace('/', Path.DirectorySeparatorChar)
+            .TrimStart(Path.DirectorySeparatorChar);
+
+        var fullPath = Path.Combine(webRoot, normalizedRelativePath);
+
+        if (!File.Exists(fullPath))
+            return null;
+
+        try
+        {
+            return File.ReadAllBytes(fullPath);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static void BuildDocumentStatus(
@@ -228,7 +289,7 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
         empleado.DocumentosVencidos = vencidos;
     }
 
-    private static void ComposeOverviewSection(IContainer container, EmpleadoFichaViewModel empleado)
+    private static void ComposeIdentitySection(IContainer container, EmpleadoFichaViewModel empleado)
     {
         CorporatePdfBlocks.ComposeSection(container, "Identificación general", body =>
         {
@@ -236,28 +297,19 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
             {
                 row.Spacing(12);
 
-                row.RelativeItem().Column(left =>
+                row.RelativeItem(3).Column(left =>
                 {
-                    left.Spacing(4);
-                    CorporatePdfBlocks.ComposeLabeledField(left, "Número de empleado", CorporateReportFormatters.NullSafe(empleado.NumEmpleado));
-                    CorporatePdfBlocks.ComposeLabeledField(left, "Nombre completo", CorporateReportFormatters.CombineFullName(
-                        empleado.Nombres,
-                        empleado.ApellidoPaterno,
-                        empleado.ApellidoMaterno));
-                });
+                    left.Spacing(6);
 
-                row.RelativeItem().Column(center =>
-                {
-                    center.Spacing(4);
-                    CorporatePdfBlocks.ComposeLabeledField(center, "Puesto actual", CorporateReportFormatters.NullSafe(empleado.Puesto));
-                    CorporatePdfBlocks.ComposeLabeledField(center, "Departamento", CorporateReportFormatters.NullSafe(empleado.Departamento));
-                });
+                    left.Item().Text(CorporateReportFormatters.CombineFullName(
+                            empleado.Nombres,
+                            empleado.ApellidoPaterno,
+                            empleado.ApellidoMaterno))
+                        .FontSize(15)
+                        .SemiBold()
+                        .FontColor(CorporateReportPalette.Ink900);
 
-                row.RelativeItem().Column(right =>
-                {
-                    right.Spacing(6);
-
-                    right.Item().Row(chips =>
+                    left.Item().Row(chips =>
                     {
                         chips.Spacing(6);
 
@@ -276,10 +328,74 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                                 CorporateReportPalette.GetBooleanAccent(empleado.Activo)));
                     });
 
-                    CorporatePdfBlocks.ComposeLabeledField(right, "Sucursal", CorporateReportFormatters.NullSafe(empleado.Sucursal));
+                    left.Item().Row(fields =>
+                    {
+                        fields.Spacing(12);
+
+                        fields.RelativeItem().Column(col =>
+                        {
+                            col.Spacing(4);
+                            CorporatePdfBlocks.ComposeLabeledField(col, "Número de empleado", CorporateReportFormatters.NullSafe(empleado.NumEmpleado));
+                            CorporatePdfBlocks.ComposeLabeledField(col, "Puesto actual", CorporateReportFormatters.NullSafe(empleado.Puesto));
+                            CorporatePdfBlocks.ComposeLabeledField(col, "Departamento", CorporateReportFormatters.NullSafe(empleado.Departamento));
+                        });
+
+                        fields.RelativeItem().Column(col =>
+                        {
+                            col.Spacing(4);
+                            CorporatePdfBlocks.ComposeLabeledField(col, "Sucursal", CorporateReportFormatters.NullSafe(empleado.Sucursal));
+                            CorporatePdfBlocks.ComposeLabeledField(col, "Fecha de ingreso", CorporateReportFormatters.FormatDate(empleado.FechaIngreso));
+                            CorporatePdfBlocks.ComposeLabeledField(col, "Correo", CorporateReportFormatters.NullSafe(empleado.Email));
+                        });
+                    });
                 });
+
+                row.ConstantItem(110).Element(c => ComposePhotoBlock(c, empleado));
             });
         });
+    }
+
+    private static void ComposePhotoBlock(IContainer container, EmpleadoFichaViewModel empleado)
+    {
+        container
+            .Border(1)
+            .BorderColor(Colors.Grey.Lighten3)
+            .Background(Colors.White)
+            .Padding(6)
+            .Column(column =>
+            {
+                column.Spacing(4);
+
+                column.Item().AlignCenter().Text("Fotografía")
+                    .FontSize(8.5f)
+                    .SemiBold()
+                    .FontColor(CorporateReportPalette.Ink600);
+
+                column.Item().Height(120).Element(photoContainer =>
+                {
+                    var frame = photoContainer
+                        .Border(1)
+                        .BorderColor(Colors.Grey.Lighten3)
+                        .Background(Colors.Grey.Lighten5)
+                        .AlignMiddle()
+                        .AlignCenter();
+
+                    if (empleado.FotoBytes is { Length: > 0 })
+                    {
+                        frame.Padding(2).Image(empleado.FotoBytes).FitArea();
+                        return;
+                    }
+
+                    frame.Text("Sin fotografía registrada")
+                        .FontSize(8)
+                        .FontColor(CorporateReportPalette.Ink500)
+                        .AlignCenter();
+                });
+
+                column.Item().AlignCenter().Text(CorporateReportFormatters.NullSafe(empleado.NumEmpleado))
+                    .FontSize(7.8f)
+                    .FontColor(CorporateReportPalette.Ink500);
+            });
     }
 
     private static void ComposeSummarySection(IContainer container, EmpleadoFichaViewModel empleado)
@@ -292,9 +408,9 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
             ("Ingreso", CorporateReportFormatters.FormatDate(empleado.FechaIngreso), "Fecha de alta", CorporateReportPalette.KpiTeal));
     }
 
-    private static void ComposePersonalDataSection(IContainer container, EmpleadoFichaViewModel empleado)
+    private static void ComposeGeneralDataSection(IContainer container, EmpleadoFichaViewModel empleado)
     {
-        CorporatePdfBlocks.ComposeSection(container, "Datos personales", body =>
+        CorporatePdfBlocks.ComposeSection(container, "Datos generales", body =>
         {
             body.Item().Row(row =>
             {
@@ -303,15 +419,102 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                 row.RelativeItem().Column(left =>
                 {
                     left.Spacing(4);
-                    CorporatePdfBlocks.ComposeLabeledField(left, "Fecha de nacimiento", CorporateReportFormatters.FormatDateNullable(empleado.FechaNacimiento));
-                    CorporatePdfBlocks.ComposeLabeledField(left, "Teléfono", CorporateReportFormatters.NullSafe(empleado.Telefono));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Nombres", CorporateReportFormatters.NullSafe(empleado.Nombres));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Apellido paterno", CorporateReportFormatters.NullSafe(empleado.ApellidoPaterno));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Apellido materno", CorporateReportFormatters.NullSafe(empleado.ApellidoMaterno));
                 });
 
                 row.RelativeItem().Column(right =>
                 {
                     right.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Fecha de nacimiento", CorporateReportFormatters.FormatDateNullable(empleado.FechaNacimiento));
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Teléfono", CorporateReportFormatters.NullSafe(empleado.Telefono));
                     CorporatePdfBlocks.ComposeLabeledField(right, "Correo", CorporateReportFormatters.NullSafe(empleado.Email));
-                    CorporatePdfBlocks.ComposeLabeledField(right, "Empleado ID", empleado.Id.ToString(CultureInfo.InvariantCulture));
+                });
+            });
+        });
+    }
+
+    private static void ComposeOfficialDataSection(IContainer container, EmpleadoFichaViewModel empleado)
+    {
+        CorporatePdfBlocks.ComposeSection(container, "Identificación oficial", body =>
+        {
+            body.Item().Row(row =>
+            {
+                row.Spacing(14);
+
+                row.RelativeItem().Column(left =>
+                {
+                    left.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(left, "CURP", CorporateReportFormatters.NullSafe(empleado.Curp));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "RFC", CorporateReportFormatters.NullSafe(empleado.Rfc));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "NSS", CorporateReportFormatters.NullSafe(empleado.Nss));
+                });
+
+                row.RelativeItem().Column(center =>
+                {
+                    center.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(center, "Sexo", CorporateReportFormatters.FormatNullableLabel(empleado.Sexo));
+                    CorporatePdfBlocks.ComposeLabeledField(center, "Estado civil", CorporateReportFormatters.FormatNullableLabel(empleado.EstadoCivil));
+                    CorporatePdfBlocks.ComposeLabeledField(center, "Nacionalidad", CorporateReportFormatters.NullSafe(empleado.Nacionalidad));
+                });
+
+                row.RelativeItem().Column(right =>
+                {
+                    right.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Código postal fiscal", CorporateReportFormatters.NullSafe(empleado.CodigoPostalFiscal));
+                });
+            });
+        });
+    }
+
+    private static void ComposeAddressSection(IContainer container, EmpleadoFichaViewModel empleado)
+    {
+        CorporatePdfBlocks.ComposeSection(container, "Domicilio", body =>
+        {
+            body.Item().Row(row =>
+            {
+                row.Spacing(14);
+
+                row.RelativeItem(1.35f).Column(left =>
+                {
+                    left.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Calle", CorporateReportFormatters.NullSafe(empleado.DireccionCalle));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Colonia", CorporateReportFormatters.NullSafe(empleado.DireccionColonia));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Ciudad / municipio", CorporateReportFormatters.NullSafe(empleado.DireccionCiudad));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Estado", CorporateReportFormatters.NullSafe(empleado.DireccionEstado));
+                });
+
+                row.RelativeItem().Column(right =>
+                {
+                    right.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Número exterior", CorporateReportFormatters.NullSafe(empleado.DireccionNumeroExterior));
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Número interior", CorporateReportFormatters.NullSafe(empleado.DireccionNumeroInterior));
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Código postal", CorporateReportFormatters.NullSafe(empleado.DireccionCodigoPostal));
+                });
+            });
+        });
+    }
+
+    private static void ComposeEmergencyContactSection(IContainer container, EmpleadoFichaViewModel empleado)
+    {
+        CorporatePdfBlocks.ComposeSection(container, "Contacto de emergencia", body =>
+        {
+            body.Item().Row(row =>
+            {
+                row.Spacing(14);
+
+                row.RelativeItem().Column(left =>
+                {
+                    left.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Nombre", CorporateReportFormatters.NullSafe(empleado.ContactoEmergenciaNombre));
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Parentesco", CorporateReportFormatters.NullSafe(empleado.ContactoEmergenciaParentesco));
+                });
+
+                row.RelativeItem().Column(right =>
+                {
+                    right.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Teléfono", CorporateReportFormatters.NullSafe(empleado.ContactoEmergenciaTelefono));
                 });
             });
         });
@@ -328,6 +531,7 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                 row.RelativeItem().Column(left =>
                 {
                     left.Spacing(4);
+                    CorporatePdfBlocks.ComposeLabeledField(left, "Estatus laboral actual", CorporateReportFormatters.FormatLabel(empleado.EstatusLaboralActual));
                     CorporatePdfBlocks.ComposeLabeledField(left, "Fecha de baja actual", CorporateReportFormatters.FormatDateNullable(empleado.FechaBajaActual));
                     CorporatePdfBlocks.ComposeLabeledField(left, "Tipo de baja actual", CorporateReportFormatters.FormatNullableLabel(empleado.TipoBajaActual));
                 });
@@ -337,6 +541,7 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
                     right.Spacing(4);
                     CorporatePdfBlocks.ComposeLabeledField(right, "Fecha de reingreso actual", CorporateReportFormatters.FormatDateNullable(empleado.FechaReingresoActual));
                     CorporatePdfBlocks.ComposeLabeledField(right, "Recontratable", CorporateReportFormatters.FormatBoolNullable(empleado.Recontratable));
+                    CorporatePdfBlocks.ComposeLabeledField(right, "Activo", CorporateReportFormatters.FormatBool(empleado.Activo));
                 });
             });
         });
@@ -424,9 +629,9 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
             {
                 table.ColumnsDefinition(columns =>
                 {
-                    columns.RelativeColumn(2.4f);   // Documento
-                    columns.ConstantColumn(90);     // Estado
-                    columns.ConstantColumn(82);     // Vencimiento
+                    columns.RelativeColumn(2.4f);
+                    columns.ConstantColumn(90);
+                    columns.ConstantColumn(82);
                 });
 
                 table.Header(header =>
@@ -472,9 +677,11 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
         public DateOnly? FechaNacimiento { get; set; }
         public string? Telefono { get; set; }
         public string? Email { get; set; }
+
         public string? Sucursal { get; set; }
         public string? Departamento { get; set; }
         public string? Puesto { get; set; }
+
         public DateOnly FechaIngreso { get; set; }
         public string EstatusLaboralActual { get; set; } = string.Empty;
         public bool Activo { get; set; }
@@ -482,6 +689,32 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
         public string? TipoBajaActual { get; set; }
         public DateOnly? FechaReingresoActual { get; set; }
         public bool? Recontratable { get; set; }
+
+        public string? Curp { get; set; }
+        public string? Rfc { get; set; }
+        public string? Nss { get; set; }
+        public string? Sexo { get; set; }
+        public string? EstadoCivil { get; set; }
+        public string? Nacionalidad { get; set; }
+
+        public string? DireccionCalle { get; set; }
+        public string? DireccionNumeroExterior { get; set; }
+        public string? DireccionNumeroInterior { get; set; }
+        public string? DireccionColonia { get; set; }
+        public string? DireccionCiudad { get; set; }
+        public string? DireccionEstado { get; set; }
+        public string? DireccionCodigoPostal { get; set; }
+        public string? CodigoPostalFiscal { get; set; }
+
+        public string? ContactoEmergenciaNombre { get; set; }
+        public string? ContactoEmergenciaTelefono { get; set; }
+        public string? ContactoEmergenciaParentesco { get; set; }
+
+        public string? FotoNombreOriginal { get; set; }
+        public string? FotoRutaRelativa { get; set; }
+        public string? FotoMimeType { get; set; }
+        public DateTime? FotoUpdatedAtUtc { get; set; }
+        public byte[]? FotoBytes { get; set; }
 
         public List<EmpleadoFichaMovimientoViewModel> Movimientos { get; set; } = [];
         public List<EmpleadoFichaDocumentoViewModel> Documentos { get; set; } = [];

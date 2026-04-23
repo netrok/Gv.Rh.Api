@@ -6,16 +6,23 @@ namespace Gv.Rh.Infrastructure.Reports.Common;
 
 public static class CorporateReportFormatters
 {
-    private static readonly CultureInfo ReportCulture = CultureInfo.InvariantCulture;
+    private static readonly CultureInfo ReportCulture = new("es-MX");
 
-    public static string NullSafe(string? value, string fallback = "—")
+    public static string NullSafe(string? value, string fallback = "No registrado")
     {
         return string.IsNullOrWhiteSpace(value)
             ? fallback
             : value.Trim();
     }
 
-    public static string FormatLabel(string? value, string fallback = "—")
+    public static string NullSafeOrNotApplicable(string? value, string fallback = "No aplica")
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? fallback
+            : value.Trim();
+    }
+
+    public static string FormatLabel(string? value, string fallback = "No registrado")
     {
         if (string.IsNullOrWhiteSpace(value))
             return fallback;
@@ -36,7 +43,7 @@ public static class CorporateReportFormatters
                 }));
     }
 
-    public static string FormatUpperKeyLabel(string? value, string fallback = "—")
+    public static string FormatUpperKeyLabel(string? value, string fallback = "No registrado")
     {
         if (string.IsNullOrWhiteSpace(value))
             return fallback;
@@ -52,7 +59,7 @@ public static class CorporateReportFormatters
         return value ? trueLabel : falseLabel;
     }
 
-    public static string FormatBoolNullable(bool? value, string fallback = "—")
+    public static string FormatBoolNullable(bool? value, string fallback = "No registrado")
     {
         return value.HasValue ? FormatBool(value.Value) : fallback;
     }
@@ -62,34 +69,34 @@ public static class CorporateReportFormatters
         return value.ToString(format, ReportCulture);
     }
 
-    public static string FormatDateNullable(DateOnly? value, string format = "dd/MM/yyyy", string fallback = "—")
+    public static string FormatDateNullable(DateOnly? value, string format = "dd/MM/yyyy", string fallback = "No registrado")
     {
         return value.HasValue
             ? value.Value.ToString(format, ReportCulture)
             : fallback;
     }
 
-    public static string FormatDateTime(DateTime value, string format = "yyyy-MM-dd HH:mm:ss")
+    public static string FormatDateTime(DateTime value, string format = "dd/MM/yyyy HH:mm:ss")
     {
-        return value.ToString(format, ReportCulture);
+        return value.ToLocalTime().ToString(format, ReportCulture);
     }
 
-    public static string FormatDateTimeNullable(DateTime? value, string format = "yyyy-MM-dd HH:mm:ss", string fallback = "—")
+    public static string FormatDateTimeNullable(DateTime? value, string format = "dd/MM/yyyy HH:mm:ss", string fallback = "No registrado")
     {
         return value.HasValue
-            ? value.Value.ToString(format, ReportCulture)
+            ? value.Value.ToLocalTime().ToString(format, ReportCulture)
             : fallback;
     }
 
     public static string FormatUtcStamp(DateTime value)
     {
-        return $"{value.ToUniversalTime():yyyy-MM-dd HH:mm:ss} UTC";
+        return value.ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss", ReportCulture);
     }
 
     public static string FormatDateRange(
         DateOnly? from,
         DateOnly? to,
-        string emptyFallback = "(sin límite)")
+        string emptyFallback = "Sin límite")
     {
         if (!from.HasValue && !to.HasValue)
             return emptyFallback;
@@ -117,7 +124,7 @@ public static class CorporateReportFormatters
             : value.Trim();
     }
 
-    public static string ExcelText(string? value, string fallback = "—")
+    public static string ExcelText(string? value, string fallback = "No registrado")
     {
         return NullSafe(value, fallback);
     }
@@ -127,22 +134,22 @@ public static class CorporateReportFormatters
         return value.ToString(format, ReportCulture);
     }
 
-    public static string ExcelDate(DateOnly? value, string fallback = "—", string format = "dd/MM/yyyy")
+    public static string ExcelDate(DateOnly? value, string fallback = "No registrado", string format = "dd/MM/yyyy")
     {
         return value.HasValue
             ? value.Value.ToString(format, ReportCulture)
             : fallback;
     }
 
-    public static string ExcelDateTime(DateTime value, string format = "yyyy-MM-dd HH:mm:ss")
+    public static string ExcelDateTime(DateTime value, string format = "dd/MM/yyyy HH:mm:ss")
     {
-        return value.ToString(format, ReportCulture);
+        return value.ToLocalTime().ToString(format, ReportCulture);
     }
 
-    public static string ExcelDateTime(DateTime? value, string fallback = "—", string format = "yyyy-MM-dd HH:mm:ss")
+    public static string ExcelDateTime(DateTime? value, string fallback = "No registrado", string format = "dd/MM/yyyy HH:mm:ss")
     {
         return value.HasValue
-            ? value.Value.ToString(format, ReportCulture)
+            ? value.Value.ToLocalTime().ToString(format, ReportCulture)
             : fallback;
     }
 
@@ -186,17 +193,23 @@ public static class CorporateReportFormatters
 
     public static string CombineFullName(params string?[] parts)
     {
-        return string.Join(" ", parts.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!.Trim()));
+        var fullName = string.Join(" ",
+            parts.Where(x => !string.IsNullOrWhiteSpace(x))
+                 .Select(x => x!.Trim()));
+
+        return string.IsNullOrWhiteSpace(fullName)
+            ? "No registrado"
+            : fullName;
     }
 
-    public static string FormatNullableLabel(string? value, string fallback = "—")
+    public static string FormatNullableLabel(string? value, string fallback = "No registrado")
     {
         return string.IsNullOrWhiteSpace(value)
             ? fallback
             : FormatLabel(value, fallback);
     }
 
-    public static string FormatTipoDocumento(string? value, string fallback = "—")
+    public static string FormatTipoDocumento(string? value, string fallback = "No registrado")
     {
         if (string.IsNullOrWhiteSpace(value))
             return fallback;
@@ -220,6 +233,54 @@ public static class CorporateReportFormatters
         return string.IsNullOrWhiteSpace(value)
             ? fallback
             : value.Trim();
+    }
+
+    public static string FormatAddress(
+        string? calle,
+        string? numeroExterior,
+        string? numeroInterior,
+        string? colonia,
+        string? ciudad,
+        string? estado,
+        string? codigoPostal,
+        string fallback = "No registrado")
+    {
+        var line1Parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(calle))
+            line1Parts.Add(calle.Trim());
+
+        if (!string.IsNullOrWhiteSpace(numeroExterior))
+            line1Parts.Add($"Ext. {numeroExterior.Trim()}");
+
+        if (!string.IsNullOrWhiteSpace(numeroInterior))
+            line1Parts.Add($"Int. {numeroInterior.Trim()}");
+
+        var line2Parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(colonia))
+            line2Parts.Add(colonia.Trim());
+
+        if (!string.IsNullOrWhiteSpace(ciudad))
+            line2Parts.Add(ciudad.Trim());
+
+        if (!string.IsNullOrWhiteSpace(estado))
+            line2Parts.Add(estado.Trim());
+
+        if (!string.IsNullOrWhiteSpace(codigoPostal))
+            line2Parts.Add($"CP {codigoPostal.Trim()}");
+
+        var lines = new List<string>();
+
+        if (line1Parts.Count > 0)
+            lines.Add(string.Join(", ", line1Parts));
+
+        if (line2Parts.Count > 0)
+            lines.Add(string.Join(", ", line2Parts));
+
+        return lines.Count == 0
+            ? fallback
+            : string.Join(" | ", lines);
     }
 
     private static string RemoveDiacritics(string value)

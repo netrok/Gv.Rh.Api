@@ -78,6 +78,7 @@ public static class CorporatePdfStyles
             .Border(1)
             .BorderColor(CorporateReportPalette.Border)
             .CornerRadius(6)
+            .Background(CorporateReportPalette.White)
             .Padding(10)
             .AlignCenter()
             .AlignMiddle()

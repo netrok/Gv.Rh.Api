@@ -18,6 +18,8 @@ public static class CorporatePdfBlocks
         {
             column.Item().Row(row =>
             {
+                row.Spacing(12);
+
                 row.RelativeItem().Column(left =>
                 {
                     left.Spacing(2);
@@ -27,7 +29,7 @@ public static class CorporatePdfBlocks
                         .FontColor(CorporateReportPalette.Ink600)
                         .SemiBold();
 
-                    left.Item().Text(title)
+                    left.Item().Text(string.IsNullOrWhiteSpace(title) ? "Reporte" : title.Trim())
                         .FontSize(20)
                         .Bold()
                         .FontColor(CorporateReportPalette.Ink900);
@@ -47,13 +49,14 @@ public static class CorporatePdfBlocks
 
                 if (!string.IsNullOrWhiteSpace(rightBadgeText))
                 {
-                    row.ConstantItem(190)
-                        .AlignRight()
-                        .AlignMiddle()
-                        .Text(rightBadgeText!.Trim())
-                        .FontSize(9)
-                        .SemiBold()
-                        .FontColor(CorporateReportPalette.BrandPrimary);
+                    row.ConstantItem(180).AlignRight().AlignTop().Element(badge =>
+                    {
+                        badge.Chip(CorporateReportPalette.BrandPrimary).Text(rightBadgeText!.Trim())
+                            .FontSize(8.8f)
+                            .SemiBold()
+                            .FontColor(CorporateReportPalette.BrandPrimary)
+                            .AlignCenter();
+                    });
                 }
             });
 
@@ -104,7 +107,7 @@ public static class CorporatePdfBlocks
             .Where(x => !string.IsNullOrWhiteSpace(x.Label))
             .Select(x => (
                 Label: x.Label.Trim(),
-                Value: string.IsNullOrWhiteSpace(x.Value) ? "—" : x.Value.Trim()))
+                Value: string.IsNullOrWhiteSpace(x.Value) ? "No registrado" : x.Value.Trim()))
             .ToList();
 
         container.ReportMutedCard().Column(column =>
@@ -187,7 +190,7 @@ public static class CorporatePdfBlocks
         {
             column.Spacing(6);
 
-            column.Item().Text(title)
+            column.Item().Text(string.IsNullOrWhiteSpace(title) ? "Sección" : title.Trim())
                 .FontSize(11)
                 .Bold()
                 .FontColor(CorporateReportPalette.Ink900);
@@ -213,12 +216,12 @@ public static class CorporatePdfBlocks
         {
             item.Spacing(1.5f);
 
-            item.Item().Text(label)
+            item.Item().Text(string.IsNullOrWhiteSpace(label) ? "Campo" : label.Trim())
                 .FontSize(7.7f)
                 .SemiBold()
                 .FontColor(CorporateReportPalette.Ink500);
 
-            item.Item().Text(string.IsNullOrWhiteSpace(value) ? "—" : value.Trim())
+            item.Item().Text(string.IsNullOrWhiteSpace(value) ? "No registrado" : value.Trim())
                 .FontSize(10.1f)
                 .SemiBold()
                 .FontColor(CorporateReportPalette.Ink900);
@@ -239,7 +242,7 @@ public static class CorporatePdfBlocks
                 .FontSize(7.5f)
                 .FontColor(CorporateReportPalette.Ink500);
 
-            column.Item().AlignCenter().Text(string.IsNullOrWhiteSpace(value) ? "—" : value.Trim())
+            column.Item().AlignCenter().Text(string.IsNullOrWhiteSpace(value) ? "No registrado" : value.Trim())
                 .FontSize(9)
                 .SemiBold()
                 .FontColor(accentColor);
@@ -281,7 +284,7 @@ public static class CorporatePdfBlocks
                 .SemiBold()
                 .FontColor(CorporateReportPalette.Ink600);
 
-            column.Item().Text(string.IsNullOrWhiteSpace(value) ? "—" : value.Trim())
+            column.Item().Text(string.IsNullOrWhiteSpace(value) ? "No registrado" : value.Trim())
                 .FontSize(18.5f)
                 .Bold()
                 .FontColor(accentColor);
