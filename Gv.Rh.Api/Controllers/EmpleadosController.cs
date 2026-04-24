@@ -69,7 +69,7 @@ public class EmpleadosController : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20,
         [FromQuery] string? q = null,
-        [FromQuery] bool? activo = true,
+        [FromQuery] bool? activo = null,
         [FromQuery] int? departamentoId = null,
         [FromQuery] int? puestoId = null,
         [FromQuery] int? sucursalId = null,
