@@ -173,6 +173,7 @@ builder.Services.AddScoped<IEmpleadoDocumentoStorageService, EmpleadoDocumentoSt
 builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteService>();
 builder.Services.AddScoped<IEmpleadoNumberService, EmpleadoNumberService>();
 builder.Services.AddScoped<IEmpleadoImportService, EmpleadoImportService>();
+builder.Services.AddScoped<IEmpleadoMovimientoLaboralService, EmpleadoMovimientoLaboralService>();
 
 // Módulo Cumpleaños
 builder.Services.AddScoped<ICumpleaniosService, CumpleaniosService>();

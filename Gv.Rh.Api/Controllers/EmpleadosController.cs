@@ -27,6 +27,7 @@ public class EmpleadosController : ControllerBase
     private readonly IEmpleadoFichaReportService _empleadoFichaReportService;
     private readonly IEmpleadoNumberService _empleadoNumberService;
     private readonly IEmpleadoImportService _empleadoImportService;
+    private readonly IEmpleadoMovimientoLaboralService _empleadoMovimientoLaboralService;
 
     private static readonly Regex CurpRegex =
         new(@"^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$", RegexOptions.Compiled);
@@ -51,7 +52,8 @@ public class EmpleadosController : ControllerBase
         IEmpleadosReportService empleadosReportService,
         IEmpleadoFichaReportService empleadoFichaReportService,
         IEmpleadoNumberService empleadoNumberService,
-        IEmpleadoImportService empleadoImportService)
+        IEmpleadoImportService empleadoImportService,
+        IEmpleadoMovimientoLaboralService empleadoMovimientoLaboralService)
     {
         _db = db;
         _env = env;
@@ -59,6 +61,7 @@ public class EmpleadosController : ControllerBase
         _empleadoFichaReportService = empleadoFichaReportService;
         _empleadoNumberService = empleadoNumberService;
         _empleadoImportService = empleadoImportService;
+        _empleadoMovimientoLaboralService = empleadoMovimientoLaboralService;
     }
 
     [HttpGet]
@@ -479,8 +482,17 @@ public class EmpleadosController : ControllerBase
             UpdatedAtUtc = DateTime.UtcNow
         };
 
+        await using var tx = await _db.Database.BeginTransactionAsync(HttpContext.RequestAborted);
+
         _db.Empleados.Add(entity);
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(HttpContext.RequestAborted);
+
+        await _empleadoMovimientoLaboralService.RegistrarAltaAsync(
+            entity,
+            TryGetCurrentUserId(),
+            HttpContext.RequestAborted);
+
+        await tx.CommitAsync(HttpContext.RequestAborted);
 
         var created = await LoadEmpleadoDtoAsync(entity.Id);
         return CreatedAtAction(nameof(GetById), new { id = entity.Id }, created);
@@ -492,6 +504,14 @@ public class EmpleadosController : ControllerBase
         var entity = await _db.Empleados.FirstOrDefaultAsync(x => x.Id == id);
         if (entity is null)
             return NotFound(new { message = "Empleado no encontrado." });
+
+        if (dto.Activo != entity.Activo)
+        {
+            return BadRequest(new
+            {
+                message = "Para cambiar el estado laboral del empleado use los endpoints de baja o reingreso."
+            });
+        }
 
         var relationResult = await ResolveRelationsAsync(dto.DepartamentoId, dto.PuestoId, dto.SucursalId);
         if (relationResult.Error is not null)
@@ -526,6 +546,16 @@ public class EmpleadosController : ControllerBase
         if (duplicatedIdentityError is not null)
             return duplicatedIdentityError;
 
+        var snapshot = new EmpleadoLaboralSnapshot(
+            entity.Id,
+            entity.PuestoId,
+            entity.DepartamentoId,
+            entity.SucursalId,
+            entity.EstatusLaboralActual,
+            entity.Activo);
+
+        await using var tx = await _db.Database.BeginTransactionAsync(HttpContext.RequestAborted);
+
         entity.Nombres = dto.Nombres.Trim();
         entity.ApellidoPaterno = dto.ApellidoPaterno.Trim();
         entity.ApellidoMaterno = NormalizeNullable(dto.ApellidoMaterno);
@@ -558,7 +588,15 @@ public class EmpleadosController : ControllerBase
         entity.ContactoEmergenciaParentesco = NormalizeNullable(dto.ContactoEmergenciaParentesco);
         entity.UpdatedAtUtc = DateTime.UtcNow;
 
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(HttpContext.RequestAborted);
+
+        await _empleadoMovimientoLaboralService.RegistrarCambiosAsync(
+            snapshot,
+            entity,
+            TryGetCurrentUserId(),
+            HttpContext.RequestAborted);
+
+        await tx.CommitAsync(HttpContext.RequestAborted);
 
         var updated = await LoadEmpleadoDtoAsync(entity.Id);
         return Ok(updated);
@@ -716,6 +754,8 @@ public class EmpleadosController : ControllerBase
         if (dto.FechaBaja < empleado.FechaIngreso)
             return BadRequest(new { message = "La fecha de baja no puede ser menor a la fecha de ingreso." });
 
+        await using var tx = await _db.Database.BeginTransactionAsync(HttpContext.RequestAborted);
+
         empleado.Activo = false;
         empleado.EstatusLaboralActual = EstatusLaboralEmpleado.BAJA;
         empleado.FechaBajaActual = dto.FechaBaja;
@@ -723,21 +763,6 @@ public class EmpleadosController : ControllerBase
         empleado.Recontratable = dto.Recontratable ?? false;
         empleado.FechaReingresoActual = null;
         empleado.UpdatedAtUtc = DateTime.UtcNow;
-
-        var movimiento = new EmpleadoMovimientoLaboral
-        {
-            EmpleadoId = empleado.Id,
-            TipoMovimiento = TipoMovimientoLaboral.BAJA,
-            FechaMovimiento = dto.FechaBaja,
-            TipoBaja = dto.TipoBaja,
-            Motivo = NormalizeNullable(dto.Motivo),
-            Comentario = NormalizeNullable(dto.Comentario),
-            Recontratable = dto.Recontratable,
-            UsuarioResponsableId = TryGetCurrentUserId(),
-            CreatedAtUtc = DateTime.UtcNow
-        };
-
-        _db.EmpleadoMovimientosLaborales.Add(movimiento);
 
         if (dto.DesactivarUsuario)
         {
@@ -749,7 +774,17 @@ public class EmpleadosController : ControllerBase
             }
         }
 
-        await _db.SaveChangesAsync();
+        await _empleadoMovimientoLaboralService.RegistrarBajaAsync(
+            empleado,
+            dto.FechaBaja,
+            dto.TipoBaja,
+            NormalizeNullable(dto.Motivo),
+            NormalizeNullable(dto.Comentario),
+            dto.Recontratable,
+            TryGetCurrentUserId(),
+            HttpContext.RequestAborted);
+
+        await tx.CommitAsync(HttpContext.RequestAborted);
 
         return Ok(new
         {
@@ -794,6 +829,8 @@ public class EmpleadosController : ControllerBase
         if (relationResult.Error is not null)
             return relationResult.Error;
 
+        await using var tx = await _db.Database.BeginTransactionAsync(HttpContext.RequestAborted);
+
         empleado.Activo = true;
         empleado.EstatusLaboralActual = EstatusLaboralEmpleado.ACTIVO;
         empleado.FechaReingresoActual = dto.FechaReingreso;
@@ -805,20 +842,6 @@ public class EmpleadosController : ControllerBase
         empleado.SucursalId = relationResult.SucursalId;
         empleado.UpdatedAtUtc = DateTime.UtcNow;
 
-        var movimiento = new EmpleadoMovimientoLaboral
-        {
-            EmpleadoId = empleado.Id,
-            TipoMovimiento = TipoMovimientoLaboral.REINGRESO,
-            FechaMovimiento = dto.FechaReingreso,
-            Motivo = "Reingreso",
-            Comentario = NormalizeNullable(dto.Comentario),
-            Recontratable = true,
-            UsuarioResponsableId = TryGetCurrentUserId(),
-            CreatedAtUtc = DateTime.UtcNow
-        };
-
-        _db.EmpleadoMovimientosLaborales.Add(movimiento);
-
         if (dto.ReactivarUsuario)
         {
             var user = await _db.Users.FirstOrDefaultAsync(x => x.EmpleadoId == empleado.Id);
@@ -829,7 +852,14 @@ public class EmpleadosController : ControllerBase
             }
         }
 
-        await _db.SaveChangesAsync();
+        await _empleadoMovimientoLaboralService.RegistrarReingresoAsync(
+            empleado,
+            dto.FechaReingreso,
+            NormalizeNullable(dto.Comentario),
+            TryGetCurrentUserId(),
+            HttpContext.RequestAborted);
+
+        await tx.CommitAsync(HttpContext.RequestAborted);
 
         return Ok(new
         {
@@ -882,10 +912,25 @@ public class EmpleadosController : ControllerBase
         if (!entity.Activo)
             return NoContent();
 
+        await using var tx = await _db.Database.BeginTransactionAsync(HttpContext.RequestAborted);
+
         entity.Activo = false;
         entity.EstatusLaboralActual = EstatusLaboralEmpleado.BAJA;
+        entity.FechaBajaActual ??= DateOnly.FromDateTime(DateTime.Today);
+        entity.FechaReingresoActual = null;
         entity.UpdatedAtUtc = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+
+        await _empleadoMovimientoLaboralService.RegistrarBajaAsync(
+            entity,
+            entity.FechaBajaActual.Value,
+            entity.TipoBajaActual,
+            "Baja administrativa",
+            "Desactivación administrativa desde endpoint DELETE.",
+            entity.Recontratable,
+            TryGetCurrentUserId(),
+            HttpContext.RequestAborted);
+
+        await tx.CommitAsync(HttpContext.RequestAborted);
 
         return NoContent();
     }
@@ -900,10 +945,24 @@ public class EmpleadosController : ControllerBase
         if (entity.Activo)
             return NoContent();
 
+        await using var tx = await _db.Database.BeginTransactionAsync(HttpContext.RequestAborted);
+
         entity.Activo = true;
         entity.EstatusLaboralActual = EstatusLaboralEmpleado.ACTIVO;
+        entity.FechaReingresoActual = DateOnly.FromDateTime(DateTime.Today);
+        entity.FechaBajaActual = null;
+        entity.TipoBajaActual = null;
+        entity.Recontratable = true;
         entity.UpdatedAtUtc = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+
+        await _empleadoMovimientoLaboralService.RegistrarReingresoAsync(
+            entity,
+            entity.FechaReingresoActual.Value,
+            "Reactivación administrativa desde endpoint restore.",
+            TryGetCurrentUserId(),
+            HttpContext.RequestAborted);
+
+        await tx.CommitAsync(HttpContext.RequestAborted);
 
         return NoContent();
     }
