@@ -300,6 +300,33 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
             : trimmed;
     }
 
+    private static string FormatMovimientoTitle(string tipoMovimiento)
+    {
+        return tipoMovimiento switch
+        {
+            "ALTA" => "Alta",
+            "BAJA" => "Baja",
+            "REINGRESO" => "Reingreso",
+            "CAMBIO_PUESTO" => "Cambio de puesto",
+            "CAMBIO_DEPARTAMENTO" => "Cambio de departamento",
+            "CAMBIO_SUCURSAL" => "Cambio de sucursal",
+            "CAMBIO_SALARIO" => "Cambio de salario",
+            "CAMBIO_ESTATUS" => "Cambio de estatus",
+            _ => CorporateReportFormatters.FormatLabel(tipoMovimiento)
+        };
+    }
+
+    private static bool ShouldShowTipoBaja(EmpleadoFichaMovimientoViewModel movimiento)
+    {
+        if (!string.Equals(movimiento.TipoMovimiento, "BAJA", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var tipoBaja = movimiento.TipoBaja?.Trim();
+
+        return !string.IsNullOrWhiteSpace(tipoBaja) &&
+               !string.Equals(tipoBaja, "No registrado", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static void ComposeIdentitySection(IContainer container, EmpleadoFichaViewModel empleado)
     {
         CorporatePdfBlocks.ComposeSection(container, "Resumen laboral", body =>
@@ -544,34 +571,37 @@ public sealed class EmpleadoFichaReportService : IEmpleadoFichaReportService
 
             body.Item().Column(list =>
             {
-                list.Spacing(5);
+                list.Spacing(4);
 
                 foreach (var movimiento in movimientos)
                 {
                     list.Item().Element(c =>
                     {
-                        c.ReportMutedCard(cornerRadius: 6, padding: 8)
+                        c.ReportMutedCard(cornerRadius: 6, padding: 6)
                             .Column(card =>
                             {
-                                card.Spacing(3);
+                                card.Spacing(2);
 
                                 card.Item().Row(row =>
                                 {
-                                    row.RelativeItem().Text(CorporateReportFormatters.FormatLabel(movimiento.TipoMovimiento))
-                                        .FontSize(9.2f)
+                                    row.RelativeItem().Text(FormatMovimientoTitle(movimiento.TipoMovimiento))
+                                        .FontSize(8.8f)
                                         .SemiBold()
                                         .FontColor(CorporateReportPalette.Ink900);
 
                                     row.ConstantItem(82).AlignRight().Text(CorporateReportFormatters.FormatDate(movimiento.FechaMovimiento))
-                                        .FontSize(8.2f)
+                                        .FontSize(8f)
                                         .FontColor(CorporateReportPalette.Ink500);
                                 });
 
-                                card.Item().Text(text =>
+                                if (ShouldShowTipoBaja(movimiento))
                                 {
-                                    text.Span("Tipo de baja: ").SemiBold().FontColor(CorporateReportPalette.Ink600);
-                                    text.Span(CorporateReportFormatters.FormatNullableLabel(movimiento.TipoBaja)).FontColor(CorporateReportPalette.Ink900);
-                                });
+                                    card.Item().Text(text =>
+                                    {
+                                        text.Span("Tipo de baja: ").SemiBold().FontColor(CorporateReportPalette.Ink600);
+                                        text.Span(CorporateReportFormatters.FormatNullableLabel(movimiento.TipoBaja)).FontColor(CorporateReportPalette.Ink900);
+                                    });
+                                }
 
                                 card.Item().Text(text =>
                                 {
