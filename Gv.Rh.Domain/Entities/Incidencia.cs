@@ -20,6 +20,15 @@ public class Incidencia
 
     public EstatusIncidencia Estatus { get; set; } = EstatusIncidencia.PENDIENTE;
 
+    public int? ResueltaPorUsuarioId { get; set; }
+    public AppUser? ResueltaPorUsuario { get; set; }
+
+    public int? ResueltaPorEmpleadoId { get; set; }
+    public Empleado? ResueltaPorEmpleado { get; set; }
+
+    public DateTime? FechaResolucionUtc { get; set; }
+    public string? ComentarioResolucion { get; set; }
+
     public bool TieneEvidencia { get; set; }
 
     public string? EvidenciaNombreOriginal { get; set; }

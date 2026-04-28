@@ -25,16 +25,24 @@ public class IncidenciaConfiguration : IEntityTypeConfiguration<Incidencia>
         b.Property(x => x.Comentario)
             .HasMaxLength(1000);
 
+        b.Property(x => x.ComentarioResolucion)
+            .HasMaxLength(1000);
+
         b.Property(x => x.FechaInicio)
             .IsRequired();
 
         b.Property(x => x.FechaFin)
             .IsRequired();
 
+        b.Property(x => x.FechaResolucionUtc)
+            .HasColumnType("timestamp with time zone");
+
         b.Property(x => x.CreatedAtUtc)
+            .HasColumnType("timestamp with time zone")
             .IsRequired();
 
         b.Property(x => x.UpdatedAtUtc)
+            .HasColumnType("timestamp with time zone")
             .IsRequired();
 
         b.Property(x => x.EvidenciaNombreOriginal)
@@ -55,6 +63,9 @@ public class IncidenciaConfiguration : IEntityTypeConfiguration<Incidencia>
         b.HasIndex(x => x.Estatus);
         b.HasIndex(x => x.FechaInicio);
         b.HasIndex(x => x.FechaFin);
+        b.HasIndex(x => x.ResueltaPorUsuarioId);
+        b.HasIndex(x => x.ResueltaPorEmpleadoId);
+        b.HasIndex(x => x.FechaResolucionUtc);
 
         b.HasOne(x => x.Empleado)
             .WithMany()
@@ -64,6 +75,16 @@ public class IncidenciaConfiguration : IEntityTypeConfiguration<Incidencia>
         b.HasOne(x => x.Sucursal)
             .WithMany()
             .HasForeignKey(x => x.SucursalId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        b.HasOne(x => x.ResueltaPorUsuario)
+            .WithMany()
+            .HasForeignKey(x => x.ResueltaPorUsuarioId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        b.HasOne(x => x.ResueltaPorEmpleado)
+            .WithMany()
+            .HasForeignKey(x => x.ResueltaPorEmpleadoId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

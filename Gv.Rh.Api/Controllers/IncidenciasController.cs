@@ -1,5 +1,6 @@
 ﻿using Gv.Rh.Application.Abstractions.Reports;
 using Gv.Rh.Application.DTOs.Incidencias;
+using Gv.Rh.Application.Interfaces;
 using Gv.Rh.Domain.Common.Enums;
 using Gv.Rh.Domain.Entities;
 using Gv.Rh.Infrastructure.Persistence;
@@ -17,6 +18,9 @@ public class IncidenciasController : ControllerBase
 {
     private readonly RhDbContext _context;
     private readonly IIncidenciasReportService _incidenciasReportService;
+    private readonly IIncidenciaAuthorizationService _incidenciaAuthorizationService;
+
+    public sealed record ResolverIncidenciaDto(string? Comentario);
 
     private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -35,10 +39,12 @@ public class IncidenciasController : ControllerBase
 
     public IncidenciasController(
         RhDbContext context,
-        IIncidenciasReportService incidenciasReportService)
+        IIncidenciasReportService incidenciasReportService,
+        IIncidenciaAuthorizationService incidenciaAuthorizationService)
     {
         _context = context;
         _incidenciasReportService = incidenciasReportService;
+        _incidenciaAuthorizationService = incidenciaAuthorizationService;
     }
 
     [HttpGet]
@@ -46,7 +52,7 @@ public class IncidenciasController : ControllerBase
         [FromQuery] IncidenciaQueryDto query,
         CancellationToken cancellationToken)
     {
-        var items = await BuildIncidenciasBaseQuery(query)
+        var items = await ApplyAccessScope(BuildIncidenciasBaseQuery(query))
             .OrderByDescending(x => x.FechaInicio)
             .ThenByDescending(x => x.Id)
             .Select(x => new IncidenciaDto
@@ -99,6 +105,12 @@ public class IncidenciasController : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<ActionResult<IncidenciaDto>> GetById(int id, CancellationToken cancellationToken)
     {
+        var canView = await _incidenciaAuthorizationService.CanViewAsync(User, id, cancellationToken);
+        if (!canView)
+        {
+            return Forbid();
+        }
+
         var item = await _context.Incidencias
             .AsNoTracking()
             .Include(x => x.Empleado)
@@ -296,18 +308,30 @@ public class IncidenciasController : ControllerBase
     }
 
     [HttpPost("{id:int}/aprobar")]
-    [Authorize(Roles = "ADMIN,RRHH")]
-    public async Task<IActionResult> Aprobar(int id, CancellationToken cancellationToken)
+    public async Task<IActionResult> Aprobar(
+        int id,
+        [FromBody] ResolverIncidenciaDto? dto,
+        CancellationToken cancellationToken)
     {
         var entity = await _context.Incidencias.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
         if (entity is null)
             return NotFound(new { message = "Incidencia no encontrada." });
 
+        var canResolve = await _incidenciaAuthorizationService.CanResolveAsync(User, id, cancellationToken);
+        if (!canResolve)
+        {
+            return Forbid();
+        }
+
         if (entity.Estatus != EstatusIncidencia.PENDIENTE)
             return BadRequest(new { message = "Solo se pueden aprobar incidencias en estatus PENDIENTE." });
 
         entity.Estatus = EstatusIncidencia.APROBADA;
+        entity.ResueltaPorUsuarioId = _incidenciaAuthorizationService.GetCurrentUserId(User);
+        entity.ResueltaPorEmpleadoId = _incidenciaAuthorizationService.GetCurrentEmpleadoId(User);
+        entity.FechaResolucionUtc = DateTime.UtcNow;
+        entity.ComentarioResolucion = NormalizeNullable(dto?.Comentario);
         entity.UpdatedAtUtc = DateTime.UtcNow;
 
         await _context.SaveChangesAsync(cancellationToken);
@@ -316,18 +340,30 @@ public class IncidenciasController : ControllerBase
     }
 
     [HttpPost("{id:int}/rechazar")]
-    [Authorize(Roles = "ADMIN,RRHH")]
-    public async Task<IActionResult> Rechazar(int id, CancellationToken cancellationToken)
+    public async Task<IActionResult> Rechazar(
+        int id,
+        [FromBody] ResolverIncidenciaDto? dto,
+        CancellationToken cancellationToken)
     {
         var entity = await _context.Incidencias.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
         if (entity is null)
             return NotFound(new { message = "Incidencia no encontrada." });
 
+        var canResolve = await _incidenciaAuthorizationService.CanResolveAsync(User, id, cancellationToken);
+        if (!canResolve)
+        {
+            return Forbid();
+        }
+
         if (entity.Estatus != EstatusIncidencia.PENDIENTE)
             return BadRequest(new { message = "Solo se pueden rechazar incidencias en estatus PENDIENTE." });
 
         entity.Estatus = EstatusIncidencia.RECHAZADA;
+        entity.ResueltaPorUsuarioId = _incidenciaAuthorizationService.GetCurrentUserId(User);
+        entity.ResueltaPorEmpleadoId = _incidenciaAuthorizationService.GetCurrentEmpleadoId(User);
+        entity.FechaResolucionUtc = DateTime.UtcNow;
+        entity.ComentarioResolucion = NormalizeNullable(dto?.Comentario);
         entity.UpdatedAtUtc = DateTime.UtcNow;
 
         await _context.SaveChangesAsync(cancellationToken);
@@ -407,9 +443,14 @@ public class IncidenciasController : ControllerBase
     }
 
     [HttpGet("{id:int}/evidencia")]
-    [Authorize(Roles = "ADMIN,RRHH")]
     public async Task<IActionResult> DownloadEvidencia(int id, CancellationToken cancellationToken)
     {
+        var canView = await _incidenciaAuthorizationService.CanViewAsync(User, id, cancellationToken);
+        if (!canView)
+        {
+            return Forbid();
+        }
+
         var incidencia = await _context.Incidencias
             .AsNoTracking()
             .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
@@ -521,5 +562,30 @@ public class IncidenciasController : ControllerBase
             incidenciasQuery = incidenciasQuery.Where(x => x.FechaFin <= query.FechaHasta.Value);
 
         return incidenciasQuery;
+    }
+
+    private IQueryable<Incidencia> ApplyAccessScope(IQueryable<Incidencia> query)
+    {
+        if (_incidenciaAuthorizationService.IsAdminOrRrhh(User))
+        {
+            return query;
+        }
+
+        var empleadoId = _incidenciaAuthorizationService.GetCurrentEmpleadoId(User);
+        if (!empleadoId.HasValue)
+        {
+            return query.Where(x => false);
+        }
+
+        return query.Where(x =>
+            x.EmpleadoId == empleadoId.Value ||
+            x.Empleado.AprobadorPrimarioEmpleadoId == empleadoId.Value ||
+            x.Empleado.AprobadorSecundarioEmpleadoId == empleadoId.Value);
+    }
+
+    private static string? NormalizeNullable(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
 }
