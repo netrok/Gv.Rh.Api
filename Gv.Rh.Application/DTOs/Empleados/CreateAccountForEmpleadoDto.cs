@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using Gv.Rh.Domain.Common;
+using System.ComponentModel.DataAnnotations;
 
 namespace Gv.Rh.Application.DTOs.Empleados;
 
@@ -11,7 +12,7 @@ public class CreateAccountForEmpleadoDto
 
     [Required]
     [StringLength(50)]
-    public string Role { get; set; } = "RRHH";
+    public string Role { get; set; } = UserRoles.Empleado;
 
     [Required]
     [StringLength(200, MinimumLength = 10)]

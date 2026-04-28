@@ -138,5 +138,19 @@ public sealed class EmpleadoConfiguration : IEntityTypeConfiguration<Empleado>
             .WithMany()
             .HasForeignKey(x => x.SucursalId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(x => x.AprobadorPrimario)
+            .WithMany(x => x.SubordinadosComoAprobadorPrimario)
+            .HasForeignKey(x => x.AprobadorPrimarioEmpleadoId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(x => x.AprobadorSecundario)
+            .WithMany(x => x.SubordinadosComoAprobadorSecundario)
+            .HasForeignKey(x => x.AprobadorSecundarioEmpleadoId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasIndex(x => x.AprobadorPrimarioEmpleadoId);
+
+        builder.HasIndex(x => x.AprobadorSecundarioEmpleadoId);
     }
 }

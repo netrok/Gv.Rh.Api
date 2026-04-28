@@ -5,7 +5,6 @@ namespace Gv.Rh.Application.DTOs.Empleados;
 
 public class EmpleadoCreateDto
 {
-    [Required]
     [MaxLength(30)]
     public string NumEmpleado { get; set; } = string.Empty;
 
@@ -38,6 +37,9 @@ public class EmpleadoCreateDto
     public int? DepartamentoId { get; set; }
     public int? PuestoId { get; set; }
     public int? SucursalId { get; set; }
+
+    public int? AprobadorPrimarioEmpleadoId { get; set; }
+    public int? AprobadorSecundarioEmpleadoId { get; set; }
 
     // Identificación
     [StringLength(18)]

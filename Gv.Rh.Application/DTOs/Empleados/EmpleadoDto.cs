@@ -28,6 +28,12 @@ public class EmpleadoDto
     public int? SucursalId { get; set; }
     public string? SucursalNombre { get; set; }
 
+    public int? AprobadorPrimarioEmpleadoId { get; set; }
+    public string? AprobadorPrimarioNombre { get; set; }
+
+    public int? AprobadorSecundarioEmpleadoId { get; set; }
+    public string? AprobadorSecundarioNombre { get; set; }
+
     // Identificación
     public string? Curp { get; set; }
     public string? Rfc { get; set; }

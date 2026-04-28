@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 
 namespace Gv.Rh.Api.Controllers;
@@ -55,7 +56,8 @@ public class AuthController : ControllerBase
 
         await _audit.LogAuthAsync("LOGIN", user, new
         {
-            mustChangePassword = user.MustChangePassword
+            mustChangePassword = user.MustChangePassword,
+            empleadoId = user.EmpleadoId
         });
 
         if (user.MustChangePassword)
@@ -90,8 +92,7 @@ public class AuthController : ControllerBase
             var (access, refresh) = await _tokens.RotateRefreshTokenAsync(req.RefreshToken);
 
             var principal = _tokens.ReadPrincipalFromExpiredToken(access);
-            var userIdValue = principal.FindFirstValue(ClaimTypes.NameIdentifier)
-                ?? principal.FindFirstValue("sub");
+            var userIdValue = GetUserIdClaimValue(principal);
 
             if (!int.TryParse(userIdValue, out var userId))
             {
@@ -139,8 +140,9 @@ public class AuthController : ControllerBase
     [HttpPost("logout-all")]
     public async Task<IActionResult> LogoutAll()
     {
-        var sub = User.FindFirstValue("sub") ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (!int.TryParse(sub, out var userId))
+        var userIdValue = GetUserIdClaimValue(User);
+
+        if (!int.TryParse(userIdValue, out var userId))
         {
             return Unauthorized();
         }
@@ -156,17 +158,22 @@ public class AuthController : ControllerBase
     [HttpGet("whoami")]
     public IActionResult WhoAmI()
     {
-        var userId = User.FindFirstValue("sub") ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
-        var email = User.FindFirstValue("email") ?? User.FindFirstValue(ClaimTypes.Email);
+        var userId = GetUserIdClaimValue(User);
+        var email = User.FindFirstValue(JwtRegisteredClaimNames.Email)
+            ?? User.FindFirstValue(ClaimTypes.Email)
+            ?? User.FindFirstValue("email");
         var fullName = User.FindFirstValue(ClaimTypes.Name);
-        var role = User.FindFirstValue(ClaimTypes.Role) ?? User.FindFirstValue("role");
+        var role = User.FindFirstValue(ClaimTypes.Role)
+            ?? User.FindFirstValue("role");
+        var empleadoId = User.FindFirstValue(TokenService.EmpleadoIdClaimType);
 
         return Ok(new
         {
             userId,
             email,
             fullName,
-            role
+            role,
+            empleadoId
         });
     }
 
@@ -174,8 +181,9 @@ public class AuthController : ControllerBase
     [HttpPost("change-password")]
     public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest req)
     {
-        var sub = User.FindFirstValue("sub") ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (!int.TryParse(sub, out var userId))
+        var userIdValue = GetUserIdClaimValue(User);
+
+        if (!int.TryParse(userIdValue, out var userId))
         {
             return Unauthorized();
         }
@@ -204,9 +212,20 @@ public class AuthController : ControllerBase
         await _tokens.RevokeAllRefreshTokensForUserAsync(user.Id);
         await _db.SaveChangesAsync();
 
-        await _audit.LogAuthAsync("PASSWORD_CHANGE", user, new { revokeAll = true });
+        await _audit.LogAuthAsync("PASSWORD_CHANGE", user, new
+        {
+            revokeAll = true,
+            empleadoId = user.EmpleadoId
+        });
 
         return NoContent();
+    }
+
+    private static string? GetUserIdClaimValue(ClaimsPrincipal principal)
+    {
+        return principal.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? principal.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? principal.FindFirstValue("sub");
     }
 
     private static object BuildUserPayload(dynamic user)

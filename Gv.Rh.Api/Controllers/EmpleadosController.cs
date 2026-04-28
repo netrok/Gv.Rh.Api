@@ -83,7 +83,9 @@ public class EmpleadosController : ControllerBase
             .AsNoTracking()
             .Include(x => x.Departamento)
             .Include(x => x.Puesto)
-            .Include(x => x.Sucursal);
+            .Include(x => x.Sucursal)
+            .Include(x => x.AprobadorPrimario)
+            .Include(x => x.AprobadorSecundario);
 
         if (activo.HasValue)
             query = query.Where(e => e.Activo == activo.Value);
@@ -113,7 +115,11 @@ public class EmpleadosController : ControllerBase
                 (e.Departamento != null && EF.Functions.ILike(e.Departamento.Nombre, $"%{q}%")) ||
                 (e.Puesto != null && EF.Functions.ILike(e.Puesto.Nombre, $"%{q}%")) ||
                 (e.Sucursal != null && EF.Functions.ILike(e.Sucursal.Nombre, $"%{q}%")) ||
-                (e.Sucursal != null && EF.Functions.ILike(e.Sucursal.Clave, $"%{q}%"))
+                (e.Sucursal != null && EF.Functions.ILike(e.Sucursal.Clave, $"%{q}%")) ||
+                (e.AprobadorPrimario != null && EF.Functions.ILike(e.AprobadorPrimario.Nombres, $"%{q}%")) ||
+                (e.AprobadorPrimario != null && EF.Functions.ILike(e.AprobadorPrimario.ApellidoPaterno, $"%{q}%")) ||
+                (e.AprobadorSecundario != null && EF.Functions.ILike(e.AprobadorSecundario.Nombres, $"%{q}%")) ||
+                (e.AprobadorSecundario != null && EF.Functions.ILike(e.AprobadorSecundario.ApellidoPaterno, $"%{q}%"))
             );
         }
 
@@ -307,9 +313,9 @@ public class EmpleadosController : ControllerBase
         if (emailExists)
             return Conflict(new { message = "Email ya existe." });
 
-        var role = dto.Role.Trim();
-        if (string.IsNullOrWhiteSpace(role))
-            return BadRequest(new { message = "Role es requerido." });
+        var role = UserRoles.Normalize(dto.Role);
+        if (!UserRoles.IsValid(role))
+            return BadRequest(new { message = $"Rol inválido. Permitidos: {string.Join(", ", UserRoles.All)}" });
 
         var password = dto.Password.Trim();
         if (string.IsNullOrWhiteSpace(password))
@@ -401,6 +407,14 @@ public class EmpleadosController : ControllerBase
         if (relationResult.Error is not null)
             return relationResult.Error;
 
+        var aprobadoresResult = await ResolveAprobadoresAsync(
+            dto.AprobadorPrimarioEmpleadoId,
+            dto.AprobadorSecundarioEmpleadoId,
+            null);
+
+        if (aprobadoresResult.Error is not null)
+            return aprobadoresResult.Error;
+
         var validationError = ValidateEmpleadoExtendedFields(
             dto.Curp,
             dto.Rfc,
@@ -460,6 +474,8 @@ public class EmpleadosController : ControllerBase
             DepartamentoId = relationResult.DepartamentoId,
             PuestoId = dto.PuestoId,
             SucursalId = relationResult.SucursalId,
+            AprobadorPrimarioEmpleadoId = aprobadoresResult.AprobadorPrimarioEmpleadoId,
+            AprobadorSecundarioEmpleadoId = aprobadoresResult.AprobadorSecundarioEmpleadoId,
             Curp = normalizedCurp,
             Rfc = normalizedRfc,
             Nss = normalizedNss,
@@ -517,6 +533,14 @@ public class EmpleadosController : ControllerBase
         if (relationResult.Error is not null)
             return relationResult.Error;
 
+        var aprobadoresResult = await ResolveAprobadoresAsync(
+            dto.AprobadorPrimarioEmpleadoId,
+            dto.AprobadorSecundarioEmpleadoId,
+            id);
+
+        if (aprobadoresResult.Error is not null)
+            return aprobadoresResult.Error;
+
         var validationError = ValidateEmpleadoExtendedFields(
             dto.Curp,
             dto.Rfc,
@@ -568,6 +592,8 @@ public class EmpleadosController : ControllerBase
         entity.DepartamentoId = relationResult.DepartamentoId;
         entity.PuestoId = dto.PuestoId;
         entity.SucursalId = relationResult.SucursalId;
+        entity.AprobadorPrimarioEmpleadoId = aprobadoresResult.AprobadorPrimarioEmpleadoId;
+        entity.AprobadorSecundarioEmpleadoId = aprobadoresResult.AprobadorSecundarioEmpleadoId;
         entity.Curp = normalizedCurp;
         entity.Rfc = normalizedRfc;
         entity.Nss = normalizedNss;
@@ -1016,6 +1042,89 @@ public class EmpleadosController : ControllerBase
         return (departamentoId, sucursalId, null);
     }
 
+    private async Task<(int? AprobadorPrimarioEmpleadoId, int? AprobadorSecundarioEmpleadoId, IActionResult? Error)> ResolveAprobadoresAsync(
+        int? aprobadorPrimarioEmpleadoId,
+        int? aprobadorSecundarioEmpleadoId,
+        int? currentEmpleadoId)
+    {
+        if (currentEmpleadoId.HasValue)
+        {
+            if (aprobadorPrimarioEmpleadoId.HasValue && aprobadorPrimarioEmpleadoId.Value == currentEmpleadoId.Value)
+            {
+                return (null, null, BadRequest(new
+                {
+                    message = "El empleado no puede ser su propio aprobador primario."
+                }));
+            }
+
+            if (aprobadorSecundarioEmpleadoId.HasValue && aprobadorSecundarioEmpleadoId.Value == currentEmpleadoId.Value)
+            {
+                return (null, null, BadRequest(new
+                {
+                    message = "El empleado no puede ser su propio aprobador secundario."
+                }));
+            }
+        }
+
+        if (aprobadorPrimarioEmpleadoId.HasValue &&
+            aprobadorSecundarioEmpleadoId.HasValue &&
+            aprobadorPrimarioEmpleadoId.Value == aprobadorSecundarioEmpleadoId.Value)
+        {
+            return (null, null, BadRequest(new
+            {
+                message = "El aprobador primario y el secundario no pueden ser el mismo empleado."
+            }));
+        }
+
+        if (aprobadorPrimarioEmpleadoId.HasValue)
+        {
+            var primario = await _db.Empleados
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Id == aprobadorPrimarioEmpleadoId.Value);
+
+            if (primario is null)
+            {
+                return (null, null, BadRequest(new
+                {
+                    message = "El aprobador primario indicado no existe."
+                }));
+            }
+
+            if (!primario.Activo)
+            {
+                return (null, null, BadRequest(new
+                {
+                    message = "El aprobador primario indicado está inactivo."
+                }));
+            }
+        }
+
+        if (aprobadorSecundarioEmpleadoId.HasValue)
+        {
+            var secundario = await _db.Empleados
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Id == aprobadorSecundarioEmpleadoId.Value);
+
+            if (secundario is null)
+            {
+                return (null, null, BadRequest(new
+                {
+                    message = "El aprobador secundario indicado no existe."
+                }));
+            }
+
+            if (!secundario.Activo)
+            {
+                return (null, null, BadRequest(new
+                {
+                    message = "El aprobador secundario indicado está inactivo."
+                }));
+            }
+        }
+
+        return (aprobadorPrimarioEmpleadoId, aprobadorSecundarioEmpleadoId, null);
+    }
+
     private async Task<IActionResult?> ValidateDuplicateIdentityAsync(
         int? currentEmpleadoId,
         string? curp,
@@ -1099,6 +1208,8 @@ public class EmpleadosController : ControllerBase
             .Include(x => x.Departamento)
             .Include(x => x.Puesto)
             .Include(x => x.Sucursal)
+            .Include(x => x.AprobadorPrimario)
+            .Include(x => x.AprobadorSecundario)
             .FirstOrDefaultAsync(x => x.Id == id);
 
         return empleado is null ? null : MapEmpleadoDto(empleado);
@@ -1124,6 +1235,10 @@ public class EmpleadosController : ControllerBase
             PuestoNombre = empleado.Puesto?.Nombre,
             SucursalId = empleado.SucursalId,
             SucursalNombre = empleado.Sucursal?.Nombre,
+            AprobadorPrimarioEmpleadoId = empleado.AprobadorPrimarioEmpleadoId,
+            AprobadorPrimarioNombre = BuildNombreCompleto(empleado.AprobadorPrimario),
+            AprobadorSecundarioEmpleadoId = empleado.AprobadorSecundarioEmpleadoId,
+            AprobadorSecundarioNombre = BuildNombreCompleto(empleado.AprobadorSecundario),
             Curp = empleado.Curp,
             Rfc = empleado.Rfc,
             Nss = empleado.Nss,
@@ -1231,6 +1346,23 @@ public class EmpleadosController : ControllerBase
 
         var digits = new string(normalized.Where(char.IsDigit).ToArray());
         return string.IsNullOrWhiteSpace(digits) ? null : digits;
+    }
+
+    private static string? BuildNombreCompleto(Empleado? empleado)
+    {
+        if (empleado is null)
+            return null;
+
+        var parts = new[]
+        {
+            empleado.Nombres?.Trim(),
+            empleado.ApellidoPaterno?.Trim(),
+            empleado.ApellidoMaterno?.Trim()
+        }
+        .Where(x => !string.IsNullOrWhiteSpace(x));
+
+        var nombre = string.Join(" ", parts);
+        return string.IsNullOrWhiteSpace(nombre) ? null : nombre;
     }
 
     private static string BuildFotoApiUrl(int empleadoId, DateTime? updatedAtUtc)

@@ -54,6 +54,16 @@ public class Empleado
     public int? SucursalId { get; set; }
     public Sucursal? Sucursal { get; set; }
 
+    // Aprobación jerárquica
+    public int? AprobadorPrimarioEmpleadoId { get; set; }
+    public Empleado? AprobadorPrimario { get; set; }
+
+    public int? AprobadorSecundarioEmpleadoId { get; set; }
+    public Empleado? AprobadorSecundario { get; set; }
+
+    public ICollection<Empleado> SubordinadosComoAprobadorPrimario { get; set; } = new List<Empleado>();
+    public ICollection<Empleado> SubordinadosComoAprobadorSecundario { get; set; } = new List<Empleado>();
+
     // Identificación
     [MaxLength(18)]
     public string? Curp { get; set; }

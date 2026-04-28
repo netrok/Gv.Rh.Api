@@ -35,6 +35,9 @@ public class EmpleadoUpdateDto
     public int? PuestoId { get; set; }
     public int? SucursalId { get; set; }
 
+    public int? AprobadorPrimarioEmpleadoId { get; set; }
+    public int? AprobadorSecundarioEmpleadoId { get; set; }
+
     // Identificación
     [StringLength(18)]
     [RegularExpression(
@@ -110,4 +113,3 @@ public class EmpleadoUpdateDto
     [StringLength(60)]
     public string? ContactoEmergenciaParentesco { get; set; }
 }
-

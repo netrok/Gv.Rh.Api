@@ -12,6 +12,8 @@ namespace Gv.Rh.Api.Services;
 
 public class TokenService
 {
+    public const string EmpleadoIdClaimType = "empleado_id";
+
     private readonly IConfiguration _config;
     private readonly RhDbContext _db;
     private readonly AuditLogger _audit;
@@ -25,7 +27,7 @@ public class TokenService
 
     public string CreateAccessToken(AppUser user)
     {
-        var (key, issuer, audience, signingKey) = GetJwtConfig();
+        var (_, issuer, audience, signingKey) = GetJwtConfig();
 
         var normalizedRole = UserRoles.Normalize(user.Role);
         var displayName = string.IsNullOrWhiteSpace(user.FullName)
@@ -42,6 +44,14 @@ public class TokenService
             new(ClaimTypes.Role, normalizedRole),
             new("role", normalizedRole)
         };
+
+        if (user.EmpleadoId.HasValue)
+        {
+            claims.Add(new Claim(
+                EmpleadoIdClaimType,
+                user.EmpleadoId.Value.ToString(),
+                ClaimValueTypes.Integer32));
+        }
 
         var jwt = _config.GetSection("Jwt");
         var accessMinutes = int.TryParse(jwt["AccessMinutes"], out var m) ? m : 15;
@@ -79,7 +89,9 @@ public class TokenService
         });
 
         if (saveChanges)
+        {
             await _db.SaveChangesAsync();
+        }
 
         return (raw, hash, exp);
     }
@@ -87,7 +99,9 @@ public class TokenService
     public async Task<(string accessToken, string refreshToken)> RotateRefreshTokenAsync(string refreshTokenPlain)
     {
         if (string.IsNullOrWhiteSpace(refreshTokenPlain))
+        {
             throw new UnauthorizedAccessException("REFRESH_TOKEN_EMPTY");
+        }
 
         var now = DateTime.UtcNow;
         var tokenHash = Hash(refreshTokenPlain);
@@ -100,7 +114,9 @@ public class TokenService
                 x.ReplacedByTokenHash == null);
 
         if (rt is null)
+        {
             throw new UnauthorizedAccessException("REFRESH_TOKEN_INVALID");
+        }
 
         if (rt.ExpiresAtUtc <= now)
         {
@@ -162,14 +178,18 @@ public class TokenService
     public async Task RevokeRefreshTokenAsync(string refreshTokenPlain)
     {
         if (string.IsNullOrWhiteSpace(refreshTokenPlain))
+        {
             return;
+        }
 
         var now = DateTime.UtcNow;
         var tokenHash = Hash(refreshTokenPlain);
 
         var rt = await _db.RefreshTokens.FirstOrDefaultAsync(x => x.TokenHash == tokenHash);
         if (rt is null || rt.RevokedAtUtc != null)
+        {
             return;
+        }
 
         rt.RevokedAtUtc = now;
         rt.RevokedReason = "LOGOUT";
@@ -185,7 +205,9 @@ public class TokenService
             .ToListAsync();
 
         if (tokens.Count == 0)
+        {
             return;
+        }
 
         foreach (var t in tokens)
         {

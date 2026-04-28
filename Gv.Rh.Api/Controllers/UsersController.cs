@@ -90,7 +90,7 @@ public class UsersController : ControllerBase
                 x.Id,
                 x.Email,
                 x.FullName,
-                x.Role,
+                role = UserRoles.Normalize(x.Role),
                 x.IsActive,
                 x.MustChangePassword,
                 x.EmpleadoId,
@@ -120,7 +120,7 @@ public class UsersController : ControllerBase
                 x.Id,
                 x.Email,
                 x.FullName,
-                x.Role,
+                role = UserRoles.Normalize(x.Role),
                 x.IsActive,
                 x.MustChangePassword,
                 x.EmpleadoId,
@@ -135,13 +135,19 @@ public class UsersController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] UserCreateDto dto, CancellationToken ct = default)
     {
-        var email = (dto.Email ?? string.Empty).Trim().ToLowerInvariant();
+        if (dto is null)
+        {
+            return BadRequest(new { message = "Payload inválido." });
+        }
+
+        var email = NormalizeEmail(dto.Email);
         if (string.IsNullOrWhiteSpace(email))
         {
             return BadRequest(new { message = "Email es obligatorio." });
         }
 
-        if (string.IsNullOrWhiteSpace(dto.Password))
+        var password = (dto.Password ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(password))
         {
             return BadRequest(new { message = "Password es obligatorio." });
         }
@@ -186,7 +192,7 @@ public class UsersController : ControllerBase
         {
             Email = email,
             FullName = ResolveFullName(email, empleado),
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password.Trim()),
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
             Role = normalizedRole,
             IsActive = dto.IsActive,
             EmpleadoId = dto.EmpleadoId,
@@ -197,23 +203,17 @@ public class UsersController : ControllerBase
         _db.Users.Add(user);
         await _db.SaveChangesAsync(ct);
 
-        return CreatedAtAction(nameof(GetById), new { id = user.Id }, new
-        {
-            user.Id,
-            user.Email,
-            user.FullName,
-            user.Role,
-            user.IsActive,
-            user.MustChangePassword,
-            user.EmpleadoId,
-            user.CreatedAtUtc,
-            user.UpdatedAtUtc
-        });
+        return CreatedAtAction(nameof(GetById), new { id = user.Id }, MapUserResponse(user));
     }
 
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] UserUpdateDto dto, CancellationToken ct = default)
     {
+        if (dto is null)
+        {
+            return BadRequest(new { message = "Payload inválido." });
+        }
+
         var user = await _db.Users.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (user is null)
         {
@@ -263,7 +263,7 @@ public class UsersController : ControllerBase
         user.EmpleadoId = dto.EmpleadoId;
         user.UpdatedAtUtc = DateTime.UtcNow;
 
-        var safeEmail = (user.Email ?? string.Empty).Trim().ToLowerInvariant();
+        var safeEmail = NormalizeEmail(user.Email);
 
         if (dto.EmpleadoId.HasValue && empleado is not null)
         {
@@ -276,18 +276,7 @@ public class UsersController : ControllerBase
 
         await _db.SaveChangesAsync(ct);
 
-        return Ok(new
-        {
-            user.Id,
-            user.Email,
-            user.FullName,
-            user.Role,
-            user.IsActive,
-            user.MustChangePassword,
-            user.EmpleadoId,
-            user.CreatedAtUtc,
-            user.UpdatedAtUtc
-        });
+        return Ok(MapUserResponse(user));
     }
 
     [HttpPost("{id:int}/reset-password")]
@@ -299,7 +288,7 @@ public class UsersController : ControllerBase
             return NotFound();
         }
 
-        var newPass = string.IsNullOrWhiteSpace(dto.NewPassword)
+        var newPass = string.IsNullOrWhiteSpace(dto?.NewPassword)
             ? GenerateTempPassword()
             : dto.NewPassword!.Trim();
 
@@ -325,7 +314,7 @@ public class UsersController : ControllerBase
             return NotFound(new { message = "Usuario no existe." });
         }
 
-        var email = user.Email?.Trim().ToLowerInvariant();
+        var email = NormalizeEmail(user.Email);
         if (string.IsNullOrWhiteSpace(email))
         {
             return BadRequest(new { message = "El usuario no tiene Email válido." });
@@ -359,18 +348,7 @@ public class UsersController : ControllerBase
         return Ok(new
         {
             message = "Empleado ligado al usuario por email.",
-            user = new
-            {
-                user.Id,
-                user.Email,
-                user.FullName,
-                user.Role,
-                user.IsActive,
-                user.MustChangePassword,
-                user.EmpleadoId,
-                user.CreatedAtUtc,
-                user.UpdatedAtUtc
-            },
+            user = MapUserResponse(user),
             empleado = new
             {
                 empleado.Id,
@@ -389,14 +367,12 @@ public class UsersController : ControllerBase
         bool newIsActive,
         CancellationToken ct)
     {
-        var currentRole = UserRoles.Normalize(currentUser.Role);
-
-        if (currentRole != UserRoles.Admin)
+        if (!UserRoles.IsAdmin(currentUser.Role))
         {
             return false;
         }
 
-        var willStopBeingAdmin = newRole != UserRoles.Admin || !newIsActive;
+        var willStopBeingAdmin = !UserRoles.IsAdmin(newRole) || !newIsActive;
         if (!willStopBeingAdmin)
         {
             return false;
@@ -410,6 +386,25 @@ public class UsersController : ControllerBase
 
         return otherActiveAdmins == 0;
     }
+
+    private static object MapUserResponse(AppUser user)
+    {
+        return new
+        {
+            user.Id,
+            user.Email,
+            user.FullName,
+            role = UserRoles.Normalize(user.Role),
+            user.IsActive,
+            user.MustChangePassword,
+            user.EmpleadoId,
+            user.CreatedAtUtc,
+            user.UpdatedAtUtc
+        };
+    }
+
+    private static string NormalizeEmail(string? email)
+        => (email ?? string.Empty).Trim().ToLowerInvariant();
 
     private static string ResolveFullName(string? email, Empleado? empleado)
     {
