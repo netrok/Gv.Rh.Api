@@ -1,4 +1,5 @@
-﻿using Gv.Rh.Application.DTOs.Cumpleanios;
+﻿using Gv.Rh.Application.Abstractions.Reports;
+using Gv.Rh.Application.DTOs.Cumpleanios;
 using Gv.Rh.Application.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -12,13 +13,16 @@ public sealed class CumpleaniosController : ControllerBase
 {
     private readonly ICumpleaniosService _cumpleaniosService;
     private readonly ICumpleaniosNotificationService _cumpleaniosNotificationService;
+    private readonly ICumpleaniosReportService _cumpleaniosReportService;
 
     public CumpleaniosController(
         ICumpleaniosService cumpleaniosService,
-        ICumpleaniosNotificationService cumpleaniosNotificationService)
+        ICumpleaniosNotificationService cumpleaniosNotificationService,
+        ICumpleaniosReportService cumpleaniosReportService)
     {
         _cumpleaniosService = cumpleaniosService;
         _cumpleaniosNotificationService = cumpleaniosNotificationService;
+        _cumpleaniosReportService = cumpleaniosReportService;
     }
 
     [HttpGet("hoy")]
@@ -100,6 +104,30 @@ public sealed class CumpleaniosController : ControllerBase
             cancellationToken);
 
         return Ok(result);
+    }
+
+    [HttpGet("export/xlsx")]
+    public async Task<IActionResult> ExportXlsx(
+        [FromQuery] CumpleaniosReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var report = await _cumpleaniosReportService.BuildXlsxAsync(
+            query,
+            cancellationToken);
+
+        return File(report.Content, report.ContentType, report.FileName);
+    }
+
+    [HttpGet("export/pdf")]
+    public async Task<IActionResult> ExportPdf(
+        [FromQuery] CumpleaniosReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var report = await _cumpleaniosReportService.BuildPdfAsync(
+            query,
+            cancellationToken);
+
+        return File(report.Content, report.ContentType, report.FileName);
     }
 
     [HttpPost("notificar-hoy")]

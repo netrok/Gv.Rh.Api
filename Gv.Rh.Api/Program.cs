@@ -168,6 +168,7 @@ builder.Services.AddScoped<IAuditReportService, AuditReportService>();
 builder.Services.AddScoped<IDepartamentosReportService, DepartamentosReportService>();
 builder.Services.AddScoped<IPuestosReportService, PuestosReportService>();
 builder.Services.AddScoped<ISucursalesReportService, SucursalesReportService>();
+builder.Services.AddScoped<ICumpleaniosReportService, CumpleaniosReportService>();
 
 builder.Services.AddScoped<IEmpleadoDocumentoStorageService, EmpleadoDocumentoStorageService>();
 builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteService>();
