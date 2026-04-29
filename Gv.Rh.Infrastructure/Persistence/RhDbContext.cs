@@ -21,6 +21,12 @@ public class RhDbContext : DbContext
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Incidencia> Incidencias => Set<Incidencia>();
 
+    // ===== Vacaciones / Kardex =====
+    public DbSet<VacacionPolitica> VacacionPoliticas => Set<VacacionPolitica>();
+    public DbSet<VacacionPoliticaDetalle> VacacionPoliticaDetalles => Set<VacacionPoliticaDetalle>();
+    public DbSet<VacacionPeriodo> VacacionPeriodos => Set<VacacionPeriodo>();
+    public DbSet<VacacionMovimiento> VacacionMovimientos => Set<VacacionMovimiento>();
+
     // ===== Reclutamiento =====
     public DbSet<Vacante> Vacantes => Set<Vacante>();
     public DbSet<Candidato> Candidatos => Set<Candidato>();
