@@ -34,6 +34,12 @@ public class EmpleadoDto
     public int? AprobadorSecundarioEmpleadoId { get; set; }
     public string? AprobadorSecundarioNombre { get; set; }
 
+    // Cuenta ligada
+    public bool TieneCuenta { get; set; }
+    public int? UsuarioId { get; set; }
+    public string? UsuarioEmail { get; set; }
+    public string? UsuarioRole { get; set; }
+
     // Identificación
     public string? Curp { get; set; }
     public string? Rfc { get; set; }

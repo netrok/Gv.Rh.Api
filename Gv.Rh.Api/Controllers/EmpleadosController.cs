@@ -151,7 +151,16 @@ public class EmpleadosController : ControllerBase
             .Take(pageSize)
             .ToListAsync();
 
-        var items = entities.Select(MapEmpleadoDto).ToList();
+        var usersByEmpleadoId = await LoadUsersByEmpleadoIdsAsync(entities.Select(x => x.Id).ToList());
+
+        var items = entities
+            .Select(entity =>
+            {
+                var dto = MapEmpleadoDto(entity);
+                ApplyLinkedUserInfo(dto, usersByEmpleadoId.TryGetValue(entity.Id, out var user) ? user : null);
+                return dto;
+            })
+            .ToList();
 
         return Ok(new
         {
@@ -293,7 +302,7 @@ public class EmpleadosController : ControllerBase
         }
     }
 
-    [Authorize(Roles = "ADMIN")]
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpPost("{id:int}/create-account")]
     public async Task<IActionResult> CreateAccount(int id, [FromBody] CreateAccountForEmpleadoDto dto)
     {
@@ -349,7 +358,7 @@ public class EmpleadosController : ControllerBase
         });
     }
 
-    [Authorize(Roles = "ADMIN")]
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpPost("{id:int}/link-user-by-email")]
     public async Task<IActionResult> LinkUserByEmail(int id)
     {
@@ -1212,7 +1221,25 @@ public class EmpleadosController : ControllerBase
             .Include(x => x.AprobadorSecundario)
             .FirstOrDefaultAsync(x => x.Id == id);
 
-        return empleado is null ? null : MapEmpleadoDto(empleado);
+        if (empleado is null)
+            return null;
+
+        var dto = MapEmpleadoDto(empleado);
+
+        var user = await _db.Users
+            .AsNoTracking()
+            .Where(x => x.EmpleadoId == id)
+            .Select(x => new LinkedUserInfo
+            {
+                Id = x.Id,
+                Email = x.Email,
+                Role = x.Role
+            })
+            .FirstOrDefaultAsync();
+
+        ApplyLinkedUserInfo(dto, user);
+
+        return dto;
     }
 
     private EmpleadoDto MapEmpleadoDto(Empleado empleado)
@@ -1289,6 +1316,35 @@ public class EmpleadosController : ControllerBase
             UsuarioResponsableId = x.UsuarioResponsableId,
             CreatedAtUtc = x.CreatedAtUtc
         };
+    }
+
+    private async Task<Dictionary<int, LinkedUserInfo>> LoadUsersByEmpleadoIdsAsync(List<int> empleadoIds)
+    {
+        if (empleadoIds.Count == 0)
+            return new Dictionary<int, LinkedUserInfo>();
+
+        return await _db.Users
+            .AsNoTracking()
+            .Where(x => x.EmpleadoId.HasValue && empleadoIds.Contains(x.EmpleadoId.Value))
+            .Select(x => new
+            {
+                EmpleadoId = x.EmpleadoId!.Value,
+                User = new LinkedUserInfo
+                {
+                    Id = x.Id,
+                    Email = x.Email,
+                    Role = x.Role
+                }
+            })
+            .ToDictionaryAsync(x => x.EmpleadoId, x => x.User);
+    }
+
+    private static void ApplyLinkedUserInfo(EmpleadoDto dto, LinkedUserInfo? user)
+    {
+        dto.TieneCuenta = user is not null;
+        dto.UsuarioId = user?.Id;
+        dto.UsuarioEmail = user?.Email;
+        dto.UsuarioRole = user?.Role;
     }
 
     private int? TryGetCurrentUserId()
@@ -1382,5 +1438,12 @@ public class EmpleadosController : ControllerBase
         }
 
         return webRoot;
+    }
+
+    private sealed class LinkedUserInfo
+    {
+        public int Id { get; set; }
+        public string Email { get; set; } = string.Empty;
+        public string Role { get; set; } = string.Empty;
     }
 }

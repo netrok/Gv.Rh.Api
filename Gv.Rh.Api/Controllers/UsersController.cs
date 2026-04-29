@@ -11,7 +11,7 @@ namespace Gv.Rh.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize(Roles = UserRoles.Admin)]
+[Authorize(Roles = $"{UserRoles.Admin},{UserRoles.Rrhh}")]
 public class UsersController : ControllerBase
 {
     private readonly RhDbContext _db;
@@ -81,10 +81,31 @@ public class UsersController : ControllerBase
 
         var total = await query.CountAsync(ct);
 
-        var items = await query
+        var rawItems = await query
             .OrderBy(x => x.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
+            .Select(x => new
+            {
+                x.Id,
+                x.Email,
+                x.FullName,
+                x.Role,
+                x.IsActive,
+                x.MustChangePassword,
+                x.EmpleadoId,
+                EmpleadoNumEmpleado = x.Empleado != null ? x.Empleado.NumEmpleado : null,
+                EmpleadoNombres = x.Empleado != null ? x.Empleado.Nombres : null,
+                EmpleadoApellidoPaterno = x.Empleado != null ? x.Empleado.ApellidoPaterno : null,
+                EmpleadoApellidoMaterno = x.Empleado != null ? x.Empleado.ApellidoMaterno : null,
+                EmpleadoEmail = x.Empleado != null ? x.Empleado.Email : null,
+                EmpleadoActivo = x.Empleado != null ? x.Empleado.Activo : (bool?)null,
+                x.CreatedAtUtc,
+                x.UpdatedAtUtc
+            })
+            .ToListAsync(ct);
+
+        var items = rawItems
             .Select(x => new
             {
                 x.Id,
@@ -94,10 +115,23 @@ public class UsersController : ControllerBase
                 x.IsActive,
                 x.MustChangePassword,
                 x.EmpleadoId,
+                empleado = x.EmpleadoId.HasValue
+                    ? new
+                    {
+                        id = x.EmpleadoId,
+                        numEmpleado = x.EmpleadoNumEmpleado,
+                        nombreCompleto = BuildEmpleadoFullName(
+                            x.EmpleadoNombres,
+                            x.EmpleadoApellidoPaterno,
+                            x.EmpleadoApellidoMaterno),
+                        email = x.EmpleadoEmail,
+                        activo = x.EmpleadoActivo
+                    }
+                    : null,
                 x.CreatedAtUtc,
                 x.UpdatedAtUtc
             })
-            .ToListAsync(ct);
+            .ToList();
 
         return Ok(new
         {
@@ -112,23 +146,7 @@ public class UsersController : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id, CancellationToken ct = default)
     {
-        var user = await _db.Users
-            .AsNoTracking()
-            .Where(x => x.Id == id)
-            .Select(x => new
-            {
-                x.Id,
-                x.Email,
-                x.FullName,
-                role = UserRoles.Normalize(x.Role),
-                x.IsActive,
-                x.MustChangePassword,
-                x.EmpleadoId,
-                x.CreatedAtUtc,
-                x.UpdatedAtUtc
-            })
-            .FirstOrDefaultAsync(ct);
-
+        var user = await BuildUserResponseAsync(id, ct);
         return user is null ? NotFound() : Ok(user);
     }
 
@@ -203,7 +221,8 @@ public class UsersController : ControllerBase
         _db.Users.Add(user);
         await _db.SaveChangesAsync(ct);
 
-        return CreatedAtAction(nameof(GetById), new { id = user.Id }, MapUserResponse(user));
+        var response = await BuildUserResponseAsync(user.Id, ct);
+        return CreatedAtAction(nameof(GetById), new { id = user.Id }, response);
     }
 
     [HttpPut("{id:int}")]
@@ -276,7 +295,8 @@ public class UsersController : ControllerBase
 
         await _db.SaveChangesAsync(ct);
 
-        return Ok(MapUserResponse(user));
+        var response = await BuildUserResponseAsync(user.Id, ct);
+        return Ok(response);
     }
 
     [HttpPost("{id:int}/reset-password")]
@@ -345,10 +365,12 @@ public class UsersController : ControllerBase
 
         await _db.SaveChangesAsync(ct);
 
+        var response = await BuildUserResponseAsync(user.Id, ct);
+
         return Ok(new
         {
             message = "Empleado ligado al usuario por email.",
-            user = MapUserResponse(user),
+            user = response,
             empleado = new
             {
                 empleado.Id,
@@ -367,12 +389,12 @@ public class UsersController : ControllerBase
         bool newIsActive,
         CancellationToken ct)
     {
-        if (!UserRoles.IsAdmin(currentUser.Role))
+        if (!IsAdminRole(currentUser.Role))
         {
             return false;
         }
 
-        var willStopBeingAdmin = !UserRoles.IsAdmin(newRole) || !newIsActive;
+        var willStopBeingAdmin = !IsAdminRole(newRole) || !newIsActive;
         if (!willStopBeingAdmin)
         {
             return false;
@@ -387,8 +409,36 @@ public class UsersController : ControllerBase
         return otherActiveAdmins == 0;
     }
 
-    private static object MapUserResponse(AppUser user)
+    private async Task<object?> BuildUserResponseAsync(int id, CancellationToken ct = default)
     {
+        var user = await _db.Users
+            .AsNoTracking()
+            .Where(x => x.Id == id)
+            .Select(x => new
+            {
+                x.Id,
+                x.Email,
+                x.FullName,
+                x.Role,
+                x.IsActive,
+                x.MustChangePassword,
+                x.EmpleadoId,
+                EmpleadoNumEmpleado = x.Empleado != null ? x.Empleado.NumEmpleado : null,
+                EmpleadoNombres = x.Empleado != null ? x.Empleado.Nombres : null,
+                EmpleadoApellidoPaterno = x.Empleado != null ? x.Empleado.ApellidoPaterno : null,
+                EmpleadoApellidoMaterno = x.Empleado != null ? x.Empleado.ApellidoMaterno : null,
+                EmpleadoEmail = x.Empleado != null ? x.Empleado.Email : null,
+                EmpleadoActivo = x.Empleado != null ? x.Empleado.Activo : (bool?)null,
+                x.CreatedAtUtc,
+                x.UpdatedAtUtc
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (user is null)
+        {
+            return null;
+        }
+
         return new
         {
             user.Id,
@@ -398,10 +448,26 @@ public class UsersController : ControllerBase
             user.IsActive,
             user.MustChangePassword,
             user.EmpleadoId,
+            empleado = user.EmpleadoId.HasValue
+                ? new
+                {
+                    id = user.EmpleadoId,
+                    numEmpleado = user.EmpleadoNumEmpleado,
+                    nombreCompleto = BuildEmpleadoFullName(
+                        user.EmpleadoNombres,
+                        user.EmpleadoApellidoPaterno,
+                        user.EmpleadoApellidoMaterno),
+                    email = user.EmpleadoEmail,
+                    activo = user.EmpleadoActivo
+                }
+                : null,
             user.CreatedAtUtc,
             user.UpdatedAtUtc
         };
     }
+
+    private static bool IsAdminRole(string? role)
+        => UserRoles.Normalize(role) == UserRoles.Admin;
 
     private static string NormalizeEmail(string? email)
         => (email ?? string.Empty).Trim().ToLowerInvariant();
@@ -433,6 +499,23 @@ public class UsersController : ControllerBase
 
         var localPart = safeEmail.Split('@')[0].Trim();
         return string.IsNullOrWhiteSpace(localPart) ? safeEmail : localPart;
+    }
+
+    private static string? BuildEmpleadoFullName(
+        string? nombres,
+        string? apellidoPaterno,
+        string? apellidoMaterno)
+    {
+        var parts = new[]
+        {
+            nombres?.Trim(),
+            apellidoPaterno?.Trim(),
+            apellidoMaterno?.Trim()
+        }
+        .Where(x => !string.IsNullOrWhiteSpace(x));
+
+        var fullName = string.Join(" ", parts);
+        return string.IsNullOrWhiteSpace(fullName) ? null : fullName;
     }
 
     private static string GenerateTempPassword()
