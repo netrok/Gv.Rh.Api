@@ -7,11 +7,12 @@ using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 
 namespace Gv.Rh.Api.Controllers;
 
 [ApiController]
-[Authorize(Roles = "ADMIN,RRHH")]
+[Authorize]
 [Route("api")]
 public class EmpleadoDocumentosController : ControllerBase
 {
@@ -52,6 +53,10 @@ public class EmpleadoDocumentosController : ControllerBase
         if (!empleadoExiste)
             return NotFound(new { message = "El empleado no existe." });
 
+        var accessDenied = await EnsureCanAccessEmpleadoAsync(empleadoId, cancellationToken);
+        if (accessDenied is not null)
+            return accessDenied;
+
         var entities = await _db.EmpleadoDocumentos
             .AsNoTracking()
             .Where(x => x.EmpleadoId == empleadoId && x.Activo)
@@ -77,6 +82,10 @@ public class EmpleadoDocumentosController : ControllerBase
 
         if (!empleadoExiste)
             return NotFound(new { message = "El empleado no existe." });
+
+        var accessDenied = await EnsureCanAccessEmpleadoAsync(empleadoId, cancellationToken);
+        if (accessDenied is not null)
+            return accessDenied;
 
         var documentos = await _db.EmpleadoDocumentos
             .AsNoTracking()
@@ -160,6 +169,10 @@ public class EmpleadoDocumentosController : ControllerBase
         if (empleado is null)
             return NotFound(new { message = "El empleado no existe." });
 
+        var accessDenied = await EnsureCanAccessEmpleadoAsync(empleadoId, cancellationToken);
+        if (accessDenied is not null)
+            return accessDenied;
+
         if (!empleado.Activo)
             return BadRequest(new { message = "No se pueden agregar documentos a un empleado inactivo." });
 
@@ -236,6 +249,10 @@ public class EmpleadoDocumentosController : ControllerBase
         if (entity is null)
             return NotFound(new { message = "El documento no existe." });
 
+        var accessDenied = await EnsureCanAccessEmpleadoAsync(entity.EmpleadoId, cancellationToken);
+        if (accessDenied is not null)
+            return accessDenied;
+
         try
         {
             var stream = _storage.OpenRead(entity.RutaRelativa);
@@ -279,6 +296,10 @@ public class EmpleadoDocumentosController : ControllerBase
         if (entity is null)
             return NotFound(new { message = "El documento no existe." });
 
+        var accessDenied = await EnsureCanAccessEmpleadoAsync(entity.EmpleadoId, cancellationToken);
+        if (accessDenied is not null)
+            return accessDenied;
+
         entity.Tipo = (TipoDocumentoEmpleado)request.Tipo;
         entity.FechaDocumento = request.FechaDocumento;
         entity.FechaVencimiento = request.FechaVencimiento;
@@ -317,6 +338,10 @@ public class EmpleadoDocumentosController : ControllerBase
 
         if (entity is null)
             return NotFound(new { message = "El documento no existe." });
+
+        var accessDenied = await EnsureCanAccessEmpleadoAsync(entity.EmpleadoId, cancellationToken);
+        if (accessDenied is not null)
+            return accessDenied;
 
         var rutaAnterior = entity.RutaRelativa;
 
@@ -361,6 +386,10 @@ public class EmpleadoDocumentosController : ControllerBase
         if (entity is null)
             return NotFound(new { message = "El documento no existe." });
 
+        var accessDenied = await EnsureCanAccessEmpleadoAsync(entity.EmpleadoId, cancellationToken);
+        if (accessDenied is not null)
+            return accessDenied;
+
         entity.Activo = false;
         entity.UpdatedAtUtc = DateTime.UtcNow;
 
@@ -369,6 +398,139 @@ public class EmpleadoDocumentosController : ControllerBase
         _storage.DeleteIfExists(entity.RutaRelativa);
 
         return NoContent();
+    }
+
+    private async Task<ActionResult?> EnsureCanAccessEmpleadoAsync(
+        int empleadoId,
+        CancellationToken cancellationToken)
+    {
+        if (CurrentUserHasAnyRole("ADMIN", "RRHH"))
+            return null;
+
+        // Cualquier usuario autenticado que NO sea ADMIN/RRHH solo puede acceder
+        // al expediente ligado a su propia cuenta. No dependemos del nombre del rol
+        // porque algunos JWT pueden traer el rol en claims no estándar.
+        var linkedEmpleadoId = await ResolveCurrentEmpleadoIdAsync(cancellationToken);
+
+        if (!linkedEmpleadoId.HasValue || linkedEmpleadoId.Value != empleadoId)
+            return Forbid();
+
+        return null;
+    }
+
+    private bool CurrentUserHasAnyRole(params string[] roles)
+    {
+        var allowed = roles
+            .Where(role => !string.IsNullOrWhiteSpace(role))
+            .Select(role => role.Trim().ToUpperInvariant())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (allowed.Count == 0)
+            return false;
+
+        var currentRoles = User.Claims
+            .Where(claim =>
+                claim.Type == ClaimTypes.Role ||
+                claim.Type == "role" ||
+                claim.Type == "roles" ||
+                claim.Type == "http://schemas.microsoft.com/ws/2008/06/identity/claims/role")
+            .SelectMany(claim => claim.Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Select(role => role.Trim().ToUpperInvariant())
+            .Where(role => !string.IsNullOrWhiteSpace(role));
+
+        return currentRoles.Any(allowed.Contains);
+    }
+
+    private async Task<int?> ResolveCurrentEmpleadoIdAsync(CancellationToken cancellationToken)
+    {
+        var empleadoIdFromClaim = TryGetIntClaimValue(
+            "empleadoId",
+            "EmpleadoId",
+            "empleado_id",
+            "rh_empleado_id");
+
+        if (empleadoIdFromClaim.HasValue && empleadoIdFromClaim.Value > 0)
+            return empleadoIdFromClaim.Value;
+
+        var userId = TryGetCurrentUserId();
+        if (userId.HasValue)
+        {
+            var empleadoIdByUserId = await _db.Users
+                .AsNoTracking()
+                .Where(x => x.Id == userId.Value && x.IsActive)
+                .Select(x => x.EmpleadoId)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (empleadoIdByUserId.HasValue && empleadoIdByUserId.Value > 0)
+                return empleadoIdByUserId.Value;
+        }
+
+        var email = GetCurrentUserEmail();
+        if (!string.IsNullOrWhiteSpace(email))
+        {
+            var normalizedEmail = email.Trim().ToLowerInvariant();
+
+            var empleadoIdByEmail = await _db.Users
+                .AsNoTracking()
+                .Where(x => x.IsActive && x.Email.ToLower() == normalizedEmail)
+                .Select(x => x.EmpleadoId)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (empleadoIdByEmail.HasValue && empleadoIdByEmail.Value > 0)
+                return empleadoIdByEmail.Value;
+
+            var empleadoIdDirectByEmail = await _db.Empleados
+                .AsNoTracking()
+                .Where(x => x.Email != null && x.Email.ToLower() == normalizedEmail)
+                .Select(x => (int?)x.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (empleadoIdDirectByEmail.HasValue && empleadoIdDirectByEmail.Value > 0)
+                return empleadoIdDirectByEmail.Value;
+        }
+
+        return null;
+    }
+
+    private int? TryGetCurrentUserId()
+    {
+        return TryGetIntClaimValue(
+            ClaimTypes.NameIdentifier,
+            "sub",
+            ClaimTypes.Sid,
+            "nameid",
+            "userId",
+            "UserId",
+            "uid");
+    }
+
+    private int? TryGetIntClaimValue(params string[] claimTypes)
+    {
+        foreach (var claimType in claimTypes)
+        {
+            var value = User.FindFirstValue(claimType);
+            if (int.TryParse(value, out var parsed) && parsed > 0)
+                return parsed;
+        }
+
+        return null;
+    }
+
+    private string? GetCurrentUserEmail()
+    {
+        var value =
+            User.FindFirstValue(ClaimTypes.Email) ??
+            User.FindFirstValue("email") ??
+            User.FindFirstValue("preferred_username") ??
+            User.FindFirstValue("unique_name") ??
+            User.FindFirstValue("upn") ??
+            User.FindFirstValue(ClaimTypes.Name) ??
+            User.Identity?.Name;
+
+        var normalized = value?.Trim();
+        return !string.IsNullOrWhiteSpace(normalized) && normalized.Contains('@')
+            ? normalized
+            : null;
     }
 
     private static string ResolveChecklistStatus(

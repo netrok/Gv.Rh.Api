@@ -18,7 +18,7 @@ namespace Gv.Rh.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize(Roles = "ADMIN,RRHH")]
+[Authorize]
 public class EmpleadosController : ControllerBase
 {
     private readonly RhDbContext _db;
@@ -64,6 +64,7 @@ public class EmpleadosController : ControllerBase
         _empleadoMovimientoLaboralService = empleadoMovimientoLaboralService;
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpGet]
     public async Task<IActionResult> GetAll(
         [FromQuery] int page = 1,
@@ -149,7 +150,7 @@ public class EmpleadosController : ControllerBase
         var entities = await query
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .ToListAsync();
+            .ToListAsync(HttpContext.RequestAborted);
 
         var usersByEmpleadoId = await LoadUsersByEmpleadoIdsAsync(entities.Select(x => x.Id).ToList());
 
@@ -175,6 +176,10 @@ public class EmpleadosController : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id)
     {
+        var accessError = await EnsureCanAccessEmpleadoAsync(id);
+        if (accessError is not null)
+            return accessError;
+
         var dto = await LoadEmpleadoDtoAsync(id);
         return dto is null
             ? NotFound(new { message = "Empleado no encontrado." })
@@ -215,6 +220,7 @@ public class EmpleadosController : ControllerBase
         return PhysicalFile(physicalPath, contentType);
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpGet("export/xlsx")]
     public async Task<IActionResult> ExportXlsx(
         [FromQuery] EmpleadosReporteQueryDto query,
@@ -224,6 +230,7 @@ public class EmpleadosController : ControllerBase
         return File(report.Content, report.ContentType, report.FileName);
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpGet("export/pdf")]
     public async Task<IActionResult> ExportPdf(
         [FromQuery] EmpleadosReporteQueryDto query,
@@ -233,6 +240,7 @@ public class EmpleadosController : ControllerBase
         return File(report.Content, report.ContentType, report.FileName);
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpGet("{id:int}/ficha/pdf")]
     public async Task<IActionResult> ExportFichaPdf(
         int id,
@@ -306,7 +314,7 @@ public class EmpleadosController : ControllerBase
     [HttpPost("{id:int}/create-account")]
     public async Task<IActionResult> CreateAccount(int id, [FromBody] CreateAccountForEmpleadoDto dto)
     {
-        var empleadoExists = await _db.Empleados.AsNoTracking().AnyAsync(x => x.Id == id);
+        var empleadoExists = await _db.Empleados.AsNoTracking().AnyAsync(x => x.Id == id, HttpContext.RequestAborted);
         if (!empleadoExists)
             return NotFound(new { message = "Empleado no existe." });
 
@@ -409,6 +417,7 @@ public class EmpleadosController : ControllerBase
         });
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] EmpleadoCreateDto dto)
     {
@@ -523,6 +532,7 @@ public class EmpleadosController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id = entity.Id }, created);
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] EmpleadoUpdateDto dto)
     {
@@ -671,6 +681,7 @@ public class EmpleadosController : ControllerBase
         });
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpGet("siguiente-numero-sugerido")]
     public async Task<IActionResult> GetSiguienteNumeroSugerido(CancellationToken cancellationToken)
     {
@@ -682,6 +693,7 @@ public class EmpleadosController : ControllerBase
         });
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpPost("{id:int}/foto")]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> SubirFoto(int id, [FromForm] IFormFile file)
@@ -748,6 +760,7 @@ public class EmpleadosController : ControllerBase
         });
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpDelete("{id:int}/foto")]
     public async Task<IActionResult> EliminarFoto(int id)
     {
@@ -776,6 +789,7 @@ public class EmpleadosController : ControllerBase
         return NoContent();
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpPost("{id:int}/baja")]
     public async Task<IActionResult> DarBaja(int id, [FromBody] DarBajaEmpleadoDto dto)
     {
@@ -840,6 +854,7 @@ public class EmpleadosController : ControllerBase
         });
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpPost("{id:int}/reingreso")]
     public async Task<IActionResult> Reingresar(int id, [FromBody] ReingresarEmpleadoDto dto)
     {
@@ -919,9 +934,13 @@ public class EmpleadosController : ControllerBase
     [HttpGet("{id:int}/movimientos")]
     public async Task<IActionResult> GetMovimientos(int id)
     {
+        var accessError = await EnsureCanAccessEmpleadoAsync(id);
+        if (accessError is not null)
+            return accessError;
+
         var empleadoExists = await _db.Empleados
             .AsNoTracking()
-            .AnyAsync(x => x.Id == id);
+            .AnyAsync(x => x.Id == id, HttpContext.RequestAborted);
 
         if (!empleadoExists)
             return NotFound(new { message = "Empleado no existe." });
@@ -932,11 +951,12 @@ public class EmpleadosController : ControllerBase
             .OrderByDescending(x => x.FechaMovimiento)
             .ThenByDescending(x => x.CreatedAtUtc)
             .Select(x => ToMovimientoDto(x))
-            .ToListAsync();
+            .ToListAsync(HttpContext.RequestAborted);
 
         return Ok(items);
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
@@ -970,6 +990,7 @@ public class EmpleadosController : ControllerBase
         return NoContent();
     }
 
+    [Authorize(Roles = "ADMIN,RRHH")]
     [HttpPost("{id:int}/restore")]
     public async Task<IActionResult> Restore(int id)
     {
@@ -1347,15 +1368,133 @@ public class EmpleadosController : ControllerBase
         dto.UsuarioRole = user?.Role;
     }
 
+    private async Task<IActionResult?> EnsureCanAccessEmpleadoAsync(int empleadoId)
+    {
+        if (CurrentUserHasAnyRole("ADMIN", "RRHH"))
+            return null;
+
+        // Cualquier usuario autenticado que NO sea ADMIN/RRHH solo puede acceder
+        // al expediente ligado a su propia cuenta. No dependemos del nombre del rol
+        // porque algunos JWT pueden traer el rol en claims no estándar.
+        var linkedEmpleadoId = await ResolveCurrentEmpleadoIdAsync(HttpContext.RequestAborted);
+
+        if (!linkedEmpleadoId.HasValue || linkedEmpleadoId.Value != empleadoId)
+            return Forbid();
+
+        return null;
+    }
+
+    private bool CurrentUserHasAnyRole(params string[] roles)
+    {
+        var allowed = roles
+            .Where(role => !string.IsNullOrWhiteSpace(role))
+            .Select(role => role.Trim().ToUpperInvariant())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (allowed.Count == 0)
+            return false;
+
+        var currentRoles = User.Claims
+            .Where(claim =>
+                claim.Type == ClaimTypes.Role ||
+                claim.Type == "role" ||
+                claim.Type == "roles" ||
+                claim.Type == "http://schemas.microsoft.com/ws/2008/06/identity/claims/role")
+            .SelectMany(claim => claim.Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Select(role => role.Trim().ToUpperInvariant())
+            .Where(role => !string.IsNullOrWhiteSpace(role));
+
+        return currentRoles.Any(allowed.Contains);
+    }
+
+    private async Task<int?> ResolveCurrentEmpleadoIdAsync(CancellationToken cancellationToken)
+    {
+        var empleadoIdFromClaim = TryGetIntClaimValue(
+            "empleadoId",
+            "EmpleadoId",
+            "empleado_id",
+            "rh_empleado_id");
+
+        if (empleadoIdFromClaim.HasValue && empleadoIdFromClaim.Value > 0)
+            return empleadoIdFromClaim.Value;
+
+        var userId = TryGetCurrentUserId();
+        if (userId.HasValue)
+        {
+            var empleadoIdByUserId = await _db.Users
+                .AsNoTracking()
+                .Where(x => x.Id == userId.Value && x.IsActive)
+                .Select(x => x.EmpleadoId)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (empleadoIdByUserId.HasValue && empleadoIdByUserId.Value > 0)
+                return empleadoIdByUserId.Value;
+        }
+
+        var email = GetCurrentUserEmail();
+        if (!string.IsNullOrWhiteSpace(email))
+        {
+            var normalizedEmail = email.Trim().ToLowerInvariant();
+
+            var empleadoIdByEmail = await _db.Users
+                .AsNoTracking()
+                .Where(x => x.IsActive && x.Email.ToLower() == normalizedEmail)
+                .Select(x => x.EmpleadoId)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (empleadoIdByEmail.HasValue && empleadoIdByEmail.Value > 0)
+                return empleadoIdByEmail.Value;
+
+            var empleadoIdDirectByEmail = await _db.Empleados
+                .AsNoTracking()
+                .Where(x => x.Email != null && x.Email.ToLower() == normalizedEmail)
+                .Select(x => (int?)x.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (empleadoIdDirectByEmail.HasValue && empleadoIdDirectByEmail.Value > 0)
+                return empleadoIdDirectByEmail.Value;
+        }
+
+        return null;
+    }
+
     private int? TryGetCurrentUserId()
     {
-        var value =
-            User.FindFirstValue(ClaimTypes.NameIdentifier) ??
-            User.FindFirstValue("sub") ??
-            User.FindFirstValue(ClaimTypes.Sid) ??
-            User.FindFirstValue("nameid");
+        return TryGetIntClaimValue(
+            ClaimTypes.NameIdentifier,
+            "sub",
+            ClaimTypes.Sid,
+            "nameid",
+            "userId",
+            "UserId",
+            "uid");
+    }
 
-        return int.TryParse(value, out var userId) ? userId : null;
+    private int? TryGetIntClaimValue(params string[] claimTypes)
+    {
+        foreach (var claimType in claimTypes)
+        {
+            var value = User.FindFirstValue(claimType);
+            if (int.TryParse(value, out var parsed) && parsed > 0)
+                return parsed;
+        }
+
+        return null;
+    }
+
+    private string? GetCurrentUserEmail()
+    {
+        var value =
+            User.FindFirstValue(ClaimTypes.Email) ??
+            User.FindFirstValue("email") ??
+            User.FindFirstValue("preferred_username") ??
+            User.FindFirstValue("unique_name") ??
+            User.FindFirstValue("upn") ??
+            User.FindFirstValue(ClaimTypes.Name) ??
+            User.Identity?.Name;
+
+        var normalized = NormalizeNullable(value);
+        return normalized?.Contains('@') == true ? normalized : null;
     }
 
     private BadRequestObjectResult? ValidateImportFile(IFormFile? file)
