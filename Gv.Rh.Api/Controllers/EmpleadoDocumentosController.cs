@@ -296,9 +296,8 @@ public class EmpleadoDocumentosController : ControllerBase
         if (entity is null)
             return NotFound(new { message = "El documento no existe." });
 
-        var accessDenied = await EnsureCanAccessEmpleadoAsync(entity.EmpleadoId, cancellationToken);
-        if (accessDenied is not null)
-            return accessDenied;
+        if (!CurrentUserHasAnyRole("ADMIN", "RRHH"))
+            return Forbid();
 
         entity.Tipo = (TipoDocumentoEmpleado)request.Tipo;
         entity.FechaDocumento = request.FechaDocumento;
@@ -386,9 +385,8 @@ public class EmpleadoDocumentosController : ControllerBase
         if (entity is null)
             return NotFound(new { message = "El documento no existe." });
 
-        var accessDenied = await EnsureCanAccessEmpleadoAsync(entity.EmpleadoId, cancellationToken);
-        if (accessDenied is not null)
-            return accessDenied;
+        if (!CurrentUserHasAnyRole("ADMIN", "RRHH"))
+            return Forbid();
 
         entity.Activo = false;
         entity.UpdatedAtUtc = DateTime.UtcNow;
