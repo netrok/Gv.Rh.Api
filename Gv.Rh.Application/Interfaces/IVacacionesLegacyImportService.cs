@@ -9,6 +9,11 @@ public interface IVacacionesLegacyImportService
         string fileName,
         CancellationToken cancellationToken = default);
 
+    Task<VacacionesLegacyConciliacionDto> ConciliarAsync(
+        Stream stream,
+        string fileName,
+        CancellationToken cancellationToken = default);
+
     Task<VacacionesLegacyImportConfirmResultDto> ConfirmAsync(
         Stream stream,
         string fileName,

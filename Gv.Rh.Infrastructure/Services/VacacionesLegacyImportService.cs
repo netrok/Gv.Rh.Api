@@ -50,7 +50,8 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
                 ApellidoMaterno = x.ApellidoMaterno,
                 Rfc = x.Rfc,
                 Nss = x.Nss,
-                FechaIngreso = x.FechaIngreso
+                FechaIngreso = x.FechaIngreso,
+                EstatusLaboralActual = x.EstatusLaboralActual
             })
             .ToListAsync(cancellationToken);
 
@@ -116,6 +117,108 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
         {
             result.Advertencias.Add("Hay saldos del Excel que difieren del saldo actual del sistema. No confirmes importación sin revisión de RH/Nóminas.");
         }
+
+        return result;
+    }
+
+    public async Task<VacacionesLegacyConciliacionDto> ConciliarAsync(
+        Stream stream,
+        string fileName,
+        CancellationToken cancellationToken = default)
+    {
+        var preview = await PreviewAsync(stream, fileName, cancellationToken);
+
+        var employees = await _db.Empleados
+            .AsNoTracking()
+            .Select(x => new EmployeeLookupRow
+            {
+                Id = x.Id,
+                NumEmpleado = x.NumEmpleado,
+                Nombres = x.Nombres,
+                ApellidoPaterno = x.ApellidoPaterno,
+                ApellidoMaterno = x.ApellidoMaterno,
+                Rfc = x.Rfc,
+                Nss = x.Nss,
+                FechaIngreso = x.FechaIngreso,
+                EstatusLaboralActual = x.EstatusLaboralActual
+            })
+            .ToListAsync(cancellationToken);
+
+        var result = new VacacionesLegacyConciliacionDto
+        {
+            Archivo = fileName,
+            TotalItemsPreview = preview.Items.Count
+        };
+
+        foreach (var item in preview.Items)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var empleadoSistema = item.EmpleadoId.HasValue
+                ? employees.FirstOrDefault(x => x.Id == item.EmpleadoId.Value)
+                : null;
+
+            var row = new VacacionesLegacyConciliacionItemDto
+            {
+                Hoja = item.Hoja,
+                FilaReferencia = item.FilaReferencia,
+
+                EmpleadoId = item.EmpleadoId,
+
+                NumEmpleadoExcel = item.NumEmpleadoExcel,
+                NombreExcel = item.NombreExcel,
+                RfcExcel = item.RfcExcel,
+                NssExcel = item.NssExcel,
+                PuestoExcel = item.PuestoExcel,
+                FechaIngresoExcel = item.FechaIngresoExcel,
+
+                NumEmpleadoSistema = item.NumEmpleadoSistema ?? empleadoSistema?.NumEmpleado,
+                NombreSistema = item.NombreSistema ?? empleadoSistema?.NombreCompleto,
+                RfcSistema = empleadoSistema?.Rfc,
+                NssSistema = empleadoSistema?.Nss,
+                EstatusLaboralSistema = empleadoSistema?.EstatusLaboral,
+
+                SaldoExcel = item.SaldoExcel,
+                SaldoSistemaActual = item.SaldoSistemaActual,
+                DiferenciaSaldo = item.Diferencia,
+
+                TienePeriodoSistema = item.TienePeriodoSistema,
+                PuedeImportar = item.PuedeImportar,
+                AccionSugerida = item.AccionSugerida,
+                Error = item.Error,
+                ObservacionesOriginales = item.ObservacionesOriginales
+            };
+
+            if (item.EmpleadoEncontrado && item.EmpleadoId.HasValue)
+            {
+                row.Estado = "ENCONTRADO";
+                row.Diferencias = BuildConciliacionDiferencias(item, empleadoSistema);
+            }
+            else
+            {
+                row.PosiblesCoincidencias = FindPossibleMatches(item, employees);
+
+                row.Estado = row.PosiblesCoincidencias.Count > 0
+                    ? "POSIBLE_COINCIDENCIA"
+                    : "NO_ENCONTRADO";
+            }
+
+            result.Items.Add(row);
+        }
+
+        result.Encontrados = result.Items.Count(x => x.Estado == "ENCONTRADO");
+        result.NoEncontrados = result.Items.Count(x => x.Estado == "NO_ENCONTRADO");
+        result.PosiblesCoincidencias = result.Items.Count(x => x.Estado == "POSIBLE_COINCIDENCIA");
+        result.ConDiferencias = result.Items.Count(x => x.Diferencias.Count > 0);
+
+        if (result.NoEncontrados > 0)
+            result.Advertencias.Add("Hay empleados del Excel que no fueron encontrados en GV RH.");
+
+        if (result.PosiblesCoincidencias > 0)
+            result.Advertencias.Add("Hay empleados no encontrados con posibles coincidencias. Revisa antes de importar.");
+
+        if (result.ConDiferencias > 0)
+            result.Advertencias.Add("Hay empleados encontrados con diferencias entre Excel y GV RH.");
 
         return result;
     }
@@ -620,6 +723,181 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
         return null;
     }
 
+    private static List<string> BuildConciliacionDiferencias(
+        VacacionesLegacyImportPreviewItemDto item,
+        EmployeeLookupRow? empleado)
+    {
+        var diferencias = new List<string>();
+
+        if (empleado is null)
+        {
+            diferencias.Add("El preview marcó empleado encontrado, pero no se pudo cargar el empleado del sistema.");
+            return diferencias;
+        }
+
+        if (HasBothAndDifferent(item.NumEmpleadoExcel, empleado.NumEmpleado, NormalizeUpper))
+        {
+            diferencias.Add($"Número de empleado distinto: Excel '{item.NumEmpleadoExcel}' vs GV RH '{empleado.NumEmpleado}'.");
+        }
+
+        if (HasBothAndDifferent(item.RfcExcel, empleado.Rfc, NormalizeUpper))
+        {
+            diferencias.Add($"RFC distinto: Excel '{item.RfcExcel}' vs GV RH '{empleado.Rfc}'.");
+        }
+
+        if (HasBothAndDifferent(item.NssExcel, empleado.Nss, DigitsOnly))
+        {
+            diferencias.Add($"NSS distinto: Excel '{item.NssExcel}' vs GV RH '{empleado.Nss}'.");
+        }
+
+        var nombreExcel = NormalizePersonName(item.NombreExcel);
+        var nombreSistema = NormalizePersonName(empleado.NombreCompleto);
+
+        if (!string.IsNullOrWhiteSpace(nombreExcel) &&
+            !string.IsNullOrWhiteSpace(nombreSistema) &&
+            nombreExcel != nombreSistema)
+        {
+            diferencias.Add($"Nombre distinto: Excel '{item.NombreExcel}' vs GV RH '{empleado.NombreCompleto}'.");
+        }
+
+        if (item.Diferencia.HasValue && item.Diferencia.Value != 0m)
+        {
+            var saldoExcel = item.SaldoExcel.GetValueOrDefault();
+            var saldoSistema = item.SaldoSistemaActual.GetValueOrDefault();
+            var diferencia = item.Diferencia.Value;
+
+            diferencias.Add($"Saldo distinto: Excel {saldoExcel:0.##} días vs GV RH {saldoSistema:0.##} días. Diferencia {diferencia:0.##}.");
+        }
+
+        if (item.TienePeriodoSistema)
+        {
+            diferencias.Add("El empleado ya tiene periodos de vacaciones en GV RH.");
+        }
+
+        return diferencias;
+    }
+
+    private static List<VacacionesLegacyConciliacionCandidatoDto> FindPossibleMatches(
+        VacacionesLegacyImportPreviewItemDto item,
+        List<EmployeeLookupRow> employees)
+    {
+        var result = new List<VacacionesLegacyConciliacionCandidatoDto>();
+
+        var numEmpleadoExcel = NormalizeUpper(item.NumEmpleadoExcel);
+        var rfcExcel = NormalizeUpper(item.RfcExcel);
+        var nssExcel = DigitsOnly(item.NssExcel);
+        var nombreExcel = NormalizePersonName(item.NombreExcel);
+
+        foreach (var employee in employees)
+        {
+            var score = 0;
+            var motivos = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(numEmpleadoExcel) &&
+                NormalizeUpper(employee.NumEmpleado) == numEmpleadoExcel)
+            {
+                score += 100;
+                motivos.Add("Número de empleado coincide.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(rfcExcel) &&
+                NormalizeUpper(employee.Rfc) == rfcExcel)
+            {
+                score += 90;
+                motivos.Add("RFC coincide.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(nssExcel) &&
+                DigitsOnly(employee.Nss) == nssExcel)
+            {
+                score += 80;
+                motivos.Add("NSS coincide.");
+            }
+
+            var nombreSistema = NormalizePersonName(employee.NombreCompleto);
+
+            if (!string.IsNullOrWhiteSpace(nombreExcel) &&
+                !string.IsNullOrWhiteSpace(nombreSistema))
+            {
+                if (nombreExcel == nombreSistema)
+                {
+                    score += 70;
+                    motivos.Add("Nombre completo coincide.");
+                }
+                else
+                {
+                    var similarity = CalculateNameSimilarity(nombreExcel, nombreSistema);
+
+                    if (similarity >= 65)
+                    {
+                        score += Math.Min(50, similarity / 2);
+                        motivos.Add($"Nombre parecido ({similarity}%).");
+                    }
+                }
+            }
+
+            if (score <= 0)
+                continue;
+
+            result.Add(new VacacionesLegacyConciliacionCandidatoDto
+            {
+                EmpleadoId = employee.Id,
+                NumEmpleado = employee.NumEmpleado,
+                Nombre = employee.NombreCompleto,
+                Rfc = employee.Rfc,
+                Nss = employee.Nss,
+                EstatusLaboral = employee.EstatusLaboral,
+                Puntaje = score,
+                Motivos = motivos
+            });
+        }
+
+        return result
+            .OrderByDescending(x => x.Puntaje)
+            .ThenBy(x => x.NumEmpleado)
+            .Take(5)
+            .ToList();
+    }
+
+    private static int CalculateNameSimilarity(string? left, string? right)
+    {
+        var leftTokens = NormalizePersonName(left)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet();
+
+        var rightTokens = NormalizePersonName(right)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet();
+
+        if (leftTokens.Count == 0 || rightTokens.Count == 0)
+            return 0;
+
+        var intersection = leftTokens.Intersect(rightTokens).Count();
+        var union = leftTokens.Union(rightTokens).Count();
+
+        if (union == 0)
+            return 0;
+
+        return (int)Math.Round(intersection * 100m / union);
+    }
+
+    private static bool HasBothAndDifferent(
+        string? left,
+        string? right,
+        Func<string?, string?> normalizer)
+    {
+        var normalizedLeft = normalizer(left);
+        var normalizedRight = normalizer(right);
+
+        if (string.IsNullOrWhiteSpace(normalizedLeft) ||
+            string.IsNullOrWhiteSpace(normalizedRight))
+        {
+            return false;
+        }
+
+        return normalizedLeft != normalizedRight;
+    }
+
     private static bool ShouldIgnoreSheet(string sheetName, List<List<string?>> rows)
     {
         var normalizedName = NormalizeKey(sheetName);
@@ -723,9 +1001,10 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
 
         foreach (Match match in PagoDiasRegex.Matches(text))
         {
-            if (TryParseDecimal(match.Groups[2].Value).HasValue)
+            var parsed = TryParseDecimal(match.Groups[2].Value);
+            if (parsed.HasValue)
             {
-                total += TryParseDecimal(match.Groups[2].Value)!.Value;
+                total += parsed.Value;
                 found = true;
             }
         }
@@ -890,6 +1169,9 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
         public string? Rfc { get; set; }
         public string? Nss { get; set; }
         public DateOnly FechaIngreso { get; set; }
+        public EstatusLaboralEmpleado EstatusLaboralActual { get; set; } = EstatusLaboralEmpleado.ACTIVO;
+
+        public string EstatusLaboral => EstatusLaboralActual.ToString();
 
         public string NombreCompleto =>
             string.Join(" ", new[]

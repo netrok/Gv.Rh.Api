@@ -41,6 +41,27 @@ public class VacacionesImportacionesController : ControllerBase
         return Ok(result);
     }
 
+    [HttpPost("legacy-excel/conciliar")]
+    [Consumes("multipart/form-data")]
+    [ProducesResponseType(typeof(VacacionesLegacyConciliacionDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<VacacionesLegacyConciliacionDto>> ConciliarLegacyExcel(
+        [FromForm] VacacionesLegacyExcelPreviewForm request,
+        CancellationToken cancellationToken)
+    {
+        var validation = ValidateExcelFile(request.Archivo);
+        if (validation is not null)
+            return validation;
+
+        await using var stream = request.Archivo.OpenReadStream();
+
+        var result = await _legacyImportService.ConciliarAsync(
+            stream,
+            request.Archivo.FileName,
+            cancellationToken);
+
+        return Ok(result);
+    }
+
     [HttpPost("legacy-excel/confirmar")]
     [Consumes("multipart/form-data")]
     [ProducesResponseType(typeof(VacacionesLegacyImportConfirmResultDto), StatusCodes.Status200OK)]
