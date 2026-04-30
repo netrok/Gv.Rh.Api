@@ -1464,90 +1464,334 @@ public sealed class VacacionesReportService : IVacacionesReportService
                 return;
             }
 
-            body.Item().Table(table =>
+            body.Item().Column(column =>
             {
-                table.ColumnsDefinition(columns =>
-                {
-                    columns.ConstantColumn(58);
-                    columns.ConstantColumn(60);
-                    columns.RelativeColumn(2.2f);
-                    columns.RelativeColumn(1.2f);
-                    columns.RelativeColumn(1.2f);
-                    columns.ConstantColumn(46);
-                    columns.ConstantColumn(86);
-                    columns.ConstantColumn(48);
-                    columns.ConstantColumn(52);
-                    columns.ConstantColumn(52);
-                    columns.ConstantColumn(56);
-                    columns.RelativeColumn(1.5f);
-                });
-
-                table.Header(header =>
-                {
-                    header.Cell().Element(c => c.TableHeaderCell()).Text("Fecha");
-                    header.Cell().Element(c => c.TableHeaderCell()).Text("Núm.");
-                    header.Cell().Element(c => c.TableHeaderCell()).Text("Empleado");
-                    header.Cell().Element(c => c.TableHeaderCell()).Text("Sucursal");
-                    header.Cell().Element(c => c.TableHeaderCell()).Text("Depto.");
-                    header.Cell().Element(c => c.TableHeaderCell()).Text("Año");
-                    header.Cell().Element(c => c.TableHeaderCell()).Text("Tipo");
-                    header.Cell().Element(c => c.TableHeaderCell()).Text("Días");
-                    header.Cell().Element(c => c.TableHeaderCell()).Text("Antes");
-                    header.Cell().Element(c => c.TableHeaderCell()).Text("Después");
-                    header.Cell().Element(c => c.TableHeaderCell()).Text("Origen");
-                    header.Cell().Element(c => c.TableHeaderCell()).Text("Comentario");
-                });
+                column.Spacing(8);
 
                 for (var index = 0; index < rows.Count; index++)
                 {
                     var item = rows[index];
-                    var background = CorporatePdfStyles.ZebraRow(index);
-                    var diasColor = item.Dias < 0
-                        ? CorporateReportPalette.Danger
-                        : item.Dias > 0
-                            ? CorporateReportPalette.Success
-                            : CorporateReportPalette.Neutral;
 
-                    table.Cell().Element(c => c.TableDataCell(background))
-                        .Text(CorporateReportFormatters.FormatDate(item.FechaMovimiento));
-
-                    table.Cell().Element(c => c.TableDataCell(background, emphasize: true))
-                        .Text(CorporateReportFormatters.NullSafe(item.NumEmpleado));
-
-                    table.Cell().Element(c => c.TableDataCell(background))
-                        .Text(CorporateReportFormatters.NullSafe(item.NombreEmpleado));
-
-                    table.Cell().Element(c => c.TableDataCell(background))
-                        .Text(CorporateReportFormatters.NullSafe(item.Sucursal, "(sin suc.)"));
-
-                    table.Cell().Element(c => c.TableDataCell(background))
-                        .Text(CorporateReportFormatters.NullSafe(item.Departamento, "(sin depto.)"));
-
-                    table.Cell().Element(c => c.TableDataCell(background))
-                        .Text(item.AnioServicio.ToString(CultureInfo.InvariantCulture));
-
-                    table.Cell().Element(c => c.TableDataCell(background))
-                        .Text(CorporateReportFormatters.FormatLabel(item.TipoMovimiento));
-
-                    table.Cell().Element(c => c.TableDataCell(background, emphasize: true))
-                        .Text(FormatDecimal(item.Dias))
-                        .FontColor(diasColor)
-                        .SemiBold();
-
-                    table.Cell().Element(c => c.TableDataCell(background))
-                        .Text(FormatDecimal(item.SaldoAntes));
-
-                    table.Cell().Element(c => c.TableDataCell(background))
-                        .Text(FormatDecimal(item.SaldoDespues));
-
-                    table.Cell().Element(c => c.TableDataCell(background))
-                        .Text(CorporateReportFormatters.NullSafe(item.Origen, "—"));
-
-                    table.Cell().Element(c => c.TableDataCell(background))
-                        .Text(CorporateReportFormatters.NullSafe(item.Comentario, "—"));
+                    column.Item().Element(container =>
+                        ComposeKardexMovementCard(container, item, index));
                 }
             });
         });
+    }
+
+    private static void ComposeKardexMovementCard(
+        IContainer container,
+        VacacionesKardexReporteRowDto item,
+        int index)
+    {
+        var comentarioLines = SplitKardexDetailLines(item.Comentario);
+        var referenciaLines = SplitKardexDetailLines(item.Referencia);
+
+        var hasImportacion =
+            !string.IsNullOrWhiteSpace(item.ImportacionArchivo) ||
+            !string.IsNullOrWhiteSpace(item.ImportacionHoja) ||
+            item.ImportacionFila.HasValue;
+
+        var diasColor = item.Dias < 0
+            ? CorporateReportPalette.Danger
+            : item.Dias > 0
+                ? CorporateReportPalette.Success
+                : CorporateReportPalette.Neutral;
+
+        var accentColor = item.Dias < 0
+            ? CorporateReportPalette.Danger
+            : item.Dias > 0
+                ? CorporateReportPalette.Success
+                : CorporateReportPalette.BrandPrimary;
+
+        container
+            .Border(1)
+            .BorderColor(CorporateReportPalette.BorderSoft)
+            .CornerRadius(8)
+            .Background(index % 2 == 0
+                ? CorporateReportPalette.White
+                : CorporateReportPalette.SurfaceMuted)
+            .Padding(8)
+            .Column(card =>
+            {
+                card.Spacing(7);
+
+                card.Item().Row(row =>
+                {
+                    row.Spacing(8);
+
+                    row.RelativeItem(2.1f).Column(col =>
+                    {
+                        col.Spacing(1);
+
+                        col.Item().Text(CorporateReportFormatters.NullSafe(item.NombreEmpleado))
+                            .FontSize(10.2f)
+                            .Bold()
+                            .FontColor(CorporateReportPalette.Ink900);
+
+                        col.Item().Text(text =>
+                        {
+                            text.Span("Núm. ")
+                                .FontSize(7.8f)
+                                .FontColor(CorporateReportPalette.Ink500);
+
+                            text.Span(CorporateReportFormatters.NullSafe(item.NumEmpleado))
+                                .FontSize(8.1f)
+                                .SemiBold()
+                                .FontColor(CorporateReportPalette.Ink700);
+
+                            text.Span(" · ")
+                                .FontSize(8.1f)
+                                .FontColor(CorporateReportPalette.Ink400);
+
+                            text.Span(CorporateReportFormatters.NullSafe(item.Sucursal, "Sin sucursal"))
+                                .FontSize(8.1f)
+                                .FontColor(CorporateReportPalette.Ink700);
+
+                            text.Span(" · ")
+                                .FontSize(8.1f)
+                                .FontColor(CorporateReportPalette.Ink400);
+
+                            text.Span(CorporateReportFormatters.NullSafe(item.Departamento, "Sin departamento"))
+                                .FontSize(8.1f)
+                                .FontColor(CorporateReportPalette.Ink700);
+                        });
+                    });
+
+                    row.ConstantItem(90).Column(col =>
+                    {
+                        col.Spacing(1);
+
+                        col.Item().Text("Fecha")
+                            .FontSize(7.4f)
+                            .SemiBold()
+                            .FontColor(CorporateReportPalette.Ink500);
+
+                        col.Item().Text(CorporateReportFormatters.FormatDate(item.FechaMovimiento))
+                            .FontSize(8.6f)
+                            .SemiBold()
+                            .FontColor(CorporateReportPalette.Ink900);
+                    });
+
+                    row.ConstantItem(96).Column(col =>
+                    {
+                        col.Spacing(1);
+
+                        col.Item().Text("Tipo")
+                            .FontSize(7.4f)
+                            .SemiBold()
+                            .FontColor(CorporateReportPalette.Ink500);
+
+                        col.Item().Text(CorporateReportFormatters.FormatLabel(item.TipoMovimiento))
+                            .FontSize(8.4f)
+                            .SemiBold()
+                            .FontColor(CorporateReportPalette.Ink900);
+                    });
+
+                    row.ConstantItem(62).Column(col =>
+                    {
+                        col.Spacing(1);
+
+                        col.Item().Text("Días")
+                            .FontSize(7.4f)
+                            .SemiBold()
+                            .FontColor(CorporateReportPalette.Ink500);
+
+                        col.Item().Text(FormatDecimal(item.Dias))
+                            .FontSize(11f)
+                            .Bold()
+                            .FontColor(diasColor);
+                    });
+
+                    row.ConstantItem(92).Column(col =>
+                    {
+                        col.Spacing(1);
+
+                        col.Item().Text("Saldo")
+                            .FontSize(7.4f)
+                            .SemiBold()
+                            .FontColor(CorporateReportPalette.Ink500);
+
+                        col.Item().Text($"{FormatDecimal(item.SaldoAntes)} → {FormatDecimal(item.SaldoDespues)}")
+                            .FontSize(8.7f)
+                            .SemiBold()
+                            .FontColor(CorporateReportPalette.Ink900);
+                    });
+                });
+
+                card.Item()
+                    .LineHorizontal(0.8f)
+                    .LineColor(CorporateReportPalette.BorderSoft);
+
+                card.Item().Row(row =>
+                {
+                    row.Spacing(8);
+
+                    row.RelativeItem().Text(text =>
+                    {
+                        text.Span("Periodo: ")
+                            .FontSize(8f)
+                            .SemiBold()
+                            .FontColor(CorporateReportPalette.Ink700);
+
+                        text.Span($"{CorporateReportFormatters.FormatDate(item.PeriodoFechaInicio)} al {CorporateReportFormatters.FormatDate(item.PeriodoFechaFin)}")
+                            .FontSize(8f)
+                            .FontColor(CorporateReportPalette.Ink900);
+
+                        text.Span(" · Año ")
+                            .FontSize(8f)
+                            .FontColor(CorporateReportPalette.Ink500);
+
+                        text.Span(item.AnioServicio.ToString(CultureInfo.InvariantCulture))
+                            .FontSize(8f)
+                            .SemiBold()
+                            .FontColor(CorporateReportPalette.Ink900);
+                    });
+
+                    row.RelativeItem().Text(text =>
+                    {
+                        text.Span("Origen: ")
+                            .FontSize(8f)
+                            .SemiBold()
+                            .FontColor(CorporateReportPalette.Ink700);
+
+                        text.Span(CorporateReportFormatters.NullSafe(item.Origen, "—"))
+                            .FontSize(8f)
+                            .FontColor(CorporateReportPalette.Ink900);
+                    });
+
+                    row.RelativeItem().Text(text =>
+                    {
+                        text.Span("Responsable: ")
+                            .FontSize(8f)
+                            .SemiBold()
+                            .FontColor(CorporateReportPalette.Ink700);
+
+                        text.Span(CorporateReportFormatters.NullSafe(item.UsuarioResponsable, "—"))
+                            .FontSize(8f)
+                            .FontColor(CorporateReportPalette.Ink900);
+                    });
+                });
+
+                if (comentarioLines.Count > 0)
+                {
+                    card.Item()
+                        .EnsureSpace(140)
+                        .Background(CorporateReportPalette.SurfaceAlt)
+                        .Border(1)
+                        .BorderColor(CorporateReportPalette.BorderSoft)
+                        .CornerRadius(6)
+                        .Padding(6)
+                        .Column(detail =>
+                        {
+                            detail.Spacing(2);
+
+                            detail.Item().Text("Detalle histórico")
+                                .FontSize(8.5f)
+                                .SemiBold()
+                                .FontColor(accentColor);
+
+                            for (var lineIndex = 0; lineIndex < comentarioLines.Count; lineIndex++)
+                            {
+                                var line = comentarioLines[lineIndex];
+
+                                detail.Item().Row(lineRow =>
+                                {
+                                    lineRow.ConstantItem(22)
+                                        .Text($"{lineIndex + 1}.")
+                                        .FontSize(7.4f)
+                                        .SemiBold()
+                                        .FontColor(CorporateReportPalette.BrandPrimary);
+
+                                    lineRow.RelativeItem()
+                                        .Text(line)
+                                        .FontSize(7.6f)
+                                        .FontColor(CorporateReportPalette.Ink900);
+                                });
+                            }
+                        });
+                }
+
+                if (referenciaLines.Count > 0)
+                {
+                    card.Item()
+                        .Background(CorporateReportPalette.White)
+                        .Border(1)
+                        .BorderColor(CorporateReportPalette.BorderSoft)
+                        .CornerRadius(6)
+                        .Padding(7)
+                        .Column(detail =>
+                        {
+                            detail.Spacing(2);
+
+                            detail.Item().Text("Referencia")
+                                .FontSize(8.2f)
+                                .SemiBold()
+                                .FontColor(CorporateReportPalette.Ink700);
+
+                            for (var lineIndex = 0; lineIndex < referenciaLines.Count; lineIndex++)
+                            {
+                                var line = referenciaLines[lineIndex];
+
+                                detail.Item().Row(lineRow =>
+                                {
+                                    lineRow.ConstantItem(22)
+                                        .Text($"{lineIndex + 1}.")
+                                        .FontSize(7.6f)
+                                        .SemiBold()
+                                        .FontColor(CorporateReportPalette.BrandPrimary);
+
+                                    lineRow.RelativeItem()
+                                        .Text(line)
+                                        .FontSize(7.9f)
+                                        .FontColor(CorporateReportPalette.Ink700);
+                                });
+                            }
+                        });
+                }
+
+                if (hasImportacion)
+                {
+                    card.Item()
+                        .Text(text =>
+                        {
+                            text.Span("Importación: ")
+                                .FontSize(7.9f)
+                                .SemiBold()
+                                .FontColor(CorporateReportPalette.Ink700);
+
+                            text.Span(CorporateReportFormatters.NullSafe(item.ImportacionArchivo, "—"))
+                                .FontSize(7.9f)
+                                .FontColor(CorporateReportPalette.Ink700);
+
+                            if (!string.IsNullOrWhiteSpace(item.ImportacionHoja))
+                            {
+                                text.Span($" · {item.ImportacionHoja.Trim()}")
+                                    .FontSize(7.9f)
+                                    .FontColor(CorporateReportPalette.Ink700);
+                            }
+
+                            if (item.ImportacionFila.HasValue)
+                            {
+                                text.Span($" · fila {item.ImportacionFila.Value.ToString(CultureInfo.InvariantCulture)}")
+                                    .FontSize(7.9f)
+                                    .FontColor(CorporateReportPalette.Ink700);
+                            }
+                        });
+                }
+            });
+    }
+
+    private static IReadOnlyList<string> SplitKardexDetailLines(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return [];
+
+        return value
+            .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .ToList();
     }
 
     private static DateOnly ResolveFechaCorte(VacacionesSaldosReporteQueryDto query)
@@ -1617,3 +1861,7 @@ public sealed class VacacionesReportService : IVacacionesReportService
         public string Search { get; set; } = "(vacío)";
     }
 }
+
+
+
+
