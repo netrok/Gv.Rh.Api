@@ -177,7 +177,10 @@ builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteSer
 builder.Services.AddScoped<IEmpleadoNumberService, EmpleadoNumberService>();
 builder.Services.AddScoped<IEmpleadoImportService, EmpleadoImportService>();
 builder.Services.AddScoped<IEmpleadoMovimientoLaboralService, EmpleadoMovimientoLaboralService>();
+
+// Módulo Vacaciones / Kárdex
 builder.Services.AddScoped<IVacacionesService, VacacionesService>();
+builder.Services.AddScoped<IVacacionesLegacyImportService, VacacionesLegacyImportService>();
 
 // Módulo Cumpleaños
 builder.Services.AddScoped<ICumpleaniosService, CumpleaniosService>();
