@@ -16,4 +16,16 @@ public interface IVacacionesReportService
     Task<ReportFileDto> BuildSaldosPdfAsync(
         VacacionesSaldosReporteQueryDto query,
         CancellationToken cancellationToken);
+
+    Task<VacacionesKardexReporteResultDto> GetKardexAsync(
+        VacacionesKardexReporteQueryDto query,
+        CancellationToken cancellationToken);
+
+    Task<ReportFileDto> BuildKardexXlsxAsync(
+        VacacionesKardexReporteQueryDto query,
+        CancellationToken cancellationToken);
+
+    Task<ReportFileDto> BuildKardexPdfAsync(
+        VacacionesKardexReporteQueryDto query,
+        CancellationToken cancellationToken);
 }
