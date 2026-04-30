@@ -107,6 +107,7 @@ static bool IsAllowedFrontendOrigin(string? origin)
 
 // CORS
 const string CorsPolicyName = "WebRh";
+
 builder.Services.AddCors(opt =>
 {
     opt.AddPolicy(CorsPolicyName, p =>
@@ -157,12 +158,13 @@ builder.Services.AddAuthorization();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<AuditSaveChangesInterceptor>();
 
-// Services de app
+// Services base de app
 builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddScoped<TokenService>();
 
 builder.Services.AddScoped<IIncidenciaAuthorizationService, IncidenciaAuthorizationService>();
 
+// Reportes corporativos
 builder.Services.AddScoped<IIncidenciasReportService, IncidenciasReportService>();
 builder.Services.AddScoped<IEmpleadosReportService, EmpleadosReportService>();
 builder.Services.AddScoped<IEmpleadoFichaReportService, EmpleadoFichaReportService>();
@@ -171,12 +173,16 @@ builder.Services.AddScoped<IDepartamentosReportService, DepartamentosReportServi
 builder.Services.AddScoped<IPuestosReportService, PuestosReportService>();
 builder.Services.AddScoped<ISucursalesReportService, SucursalesReportService>();
 builder.Services.AddScoped<ICumpleaniosReportService, CumpleaniosReportService>();
+builder.Services.AddScoped<IVacacionesReportService, VacacionesReportService>();
 
+// Empleados / expediente / importación
 builder.Services.AddScoped<IEmpleadoDocumentoStorageService, EmpleadoDocumentoStorageService>();
-builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteService>();
 builder.Services.AddScoped<IEmpleadoNumberService, EmpleadoNumberService>();
 builder.Services.AddScoped<IEmpleadoImportService, EmpleadoImportService>();
 builder.Services.AddScoped<IEmpleadoMovimientoLaboralService, EmpleadoMovimientoLaboralService>();
+
+// Reclutamiento
+builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteService>();
 
 // Módulo Vacaciones / Kárdex
 builder.Services.AddScoped<IVacacionesService, VacacionesService>();
@@ -200,7 +206,7 @@ builder.Services.Configure<NotificationsOptions>(
 builder.Services.AddScoped<IExpedienteNotificationService, ExpedienteNotificationService>();
 builder.Services.AddHostedService<ExpedienteNotificationHostedService>();
 
-// DbContext (PostgreSQL) + interceptor
+// DbContext PostgreSQL + interceptor de auditoría
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>
 {
     opt.UseNpgsql(builder.Configuration.GetConnectionString("RhDb"));
@@ -224,13 +230,16 @@ else
 }
 
 app.UseStaticFiles();
+
 app.UseCors(CorsPolicyName);
+
 app.UseAuthentication();
 app.UseMiddleware<ForcePasswordChangeMiddleware>();
 app.UseAuthorization();
+
 app.MapControllers();
 
-// Migraciones + seed + cleanup (antes de arrancar)
+// Migraciones + seed + cleanup antes de arrancar
 using (var scope = app.Services.CreateScope())
 {
     var logger = scope.ServiceProvider
