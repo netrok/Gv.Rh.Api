@@ -29,6 +29,13 @@ public class EmpleadosController : ControllerBase
     private readonly IEmpleadoImportService _empleadoImportService;
     private readonly IEmpleadoMovimientoLaboralService _empleadoMovimientoLaboralService;
 
+    /// <summary>
+    /// Servicio de vacaciones.
+    /// Se usa desde baja/DELETE para cerrar periodos vacacionales abiertos
+    /// sin borrar historial, sin descontar saldo y dejando evidencia en kárdex.
+    /// </summary>
+    private readonly IVacacionesService _vacacionesService;
+
     private static readonly Regex CurpRegex =
         new(@"^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$", RegexOptions.Compiled);
 
@@ -53,7 +60,8 @@ public class EmpleadosController : ControllerBase
         IEmpleadoFichaReportService empleadoFichaReportService,
         IEmpleadoNumberService empleadoNumberService,
         IEmpleadoImportService empleadoImportService,
-        IEmpleadoMovimientoLaboralService empleadoMovimientoLaboralService)
+        IEmpleadoMovimientoLaboralService empleadoMovimientoLaboralService,
+        IVacacionesService vacacionesService)
     {
         _db = db;
         _env = env;
@@ -62,6 +70,7 @@ public class EmpleadosController : ControllerBase
         _empleadoNumberService = empleadoNumberService;
         _empleadoImportService = empleadoImportService;
         _empleadoMovimientoLaboralService = empleadoMovimientoLaboralService;
+        _vacacionesService = vacacionesService;
     }
 
     [Authorize(Roles = "ADMIN,RRHH")]
@@ -833,11 +842,25 @@ public class EmpleadosController : ControllerBase
             TryGetCurrentUserId(),
             HttpContext.RequestAborted);
 
+        // Regla de negocio:
+        // Al dar de baja a un empleado, sus periodos vacacionales abiertos se cierran.
+        // No se borra historial, no se descuenta saldo y se deja evidencia en kárdex
+        // mediante movimiento CANCELACION con 0 días.
+        var periodosVacacionesCerrados = await _vacacionesService.CerrarPeriodosAbiertosPorBajaAsync(
+            empleado.Id,
+            dto.FechaBaja,
+            TryGetCurrentUserId(),
+            HttpContext.RequestAborted);
+
         await tx.CommitAsync(HttpContext.RequestAborted);
 
         return Ok(new
         {
             message = "Empleado dado de baja correctamente.",
+            vacaciones = new
+            {
+                periodosCerrados = periodosVacacionesCerrados
+            },
             empleado = new
             {
                 empleado.Id,
@@ -982,6 +1005,15 @@ public class EmpleadosController : ControllerBase
             "Baja administrativa",
             "Desactivación administrativa desde endpoint DELETE.",
             entity.Recontratable,
+            TryGetCurrentUserId(),
+            HttpContext.RequestAborted);
+
+        // Regla espejo de DarBaja:
+        // Si alguien usa DELETE para desactivar al empleado, también cerramos
+        // los periodos abiertos de vacaciones para mantener consistencia operativa.
+        await _vacacionesService.CerrarPeriodosAbiertosPorBajaAsync(
+            entity.Id,
+            entity.FechaBajaActual.Value,
             TryGetCurrentUserId(),
             HttpContext.RequestAborted);
 

@@ -320,6 +320,62 @@ public class VacacionesService : IVacacionesService
         return ToMovimientoDto(movimiento);
     }
 
+
+    public async Task<int> CerrarPeriodosAbiertosPorBajaAsync(
+        int empleadoId,
+        DateOnly fechaBaja,
+        int? usuarioResponsableId,
+        CancellationToken cancellationToken = default)
+    {
+        var periodos = await _db.VacacionPeriodos
+            .Where(x =>
+                x.EmpleadoId == empleadoId &&
+                x.Estatus == EstatusVacacionPeriodo.ABIERTO)
+            .OrderBy(x => x.CicloLaboral)
+            .ThenBy(x => x.AnioServicio)
+            .ToListAsync(cancellationToken);
+
+        if (periodos.Count == 0)
+            return 0;
+
+        var now = DateTime.UtcNow;
+
+        foreach (var periodo in periodos)
+        {
+            var saldoAntes = periodo.Saldo;
+
+            var comentarioCierre =
+                $"Periodo cerrado automáticamente por baja del empleado el {fechaBaja:yyyy-MM-dd}. " +
+                $"Saldo congelado: {periodo.Saldo:0.##} días.";
+
+            periodo.Estatus = EstatusVacacionPeriodo.CERRADO;
+            periodo.Comentario = AppendVacacionComentario(periodo.Comentario, comentarioCierre);
+            periodo.UpdatedAtUtc = now;
+
+            _db.VacacionMovimientos.Add(new VacacionMovimiento
+            {
+                EmpleadoId = empleadoId,
+                VacacionPeriodoId = periodo.Id,
+                CicloLaboral = periodo.CicloLaboral,
+                TipoMovimiento = TipoMovimientoVacacion.CANCELACION,
+                FechaMovimiento = fechaBaja,
+                FechaInicioDisfrute = null,
+                FechaFinDisfrute = null,
+                Dias = 0m,
+                SaldoAntes = saldoAntes,
+                SaldoDespues = periodo.Saldo,
+                Referencia = $"CICLO-{periodo.CicloLaboral}-BAJA",
+                Comentario = comentarioCierre,
+                UsuarioResponsableId = usuarioResponsableId,
+                Origen = "SISTEMA",
+                CreatedAtUtc = now
+            });
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+
+        return periodos.Count;
+    }
     private async Task EnsureEmpleadoExistsAsync(int empleadoId, CancellationToken cancellationToken)
     {
         var exists = await _db.Empleados
@@ -440,6 +496,23 @@ public class VacacionesService : IVacacionesService
         return string.Join(" ", parts);
     }
 
+
+    private static string? AppendVacacionComentario(string? comentarioActual, string comentarioNuevo)
+    {
+        var actual = NormalizeNullable(comentarioActual);
+        var nuevo = NormalizeNullable(comentarioNuevo);
+
+        if (nuevo is null)
+            return actual;
+
+        var result = actual is null
+            ? nuevo
+            : $"{actual} | {nuevo}";
+
+        return result.Length <= 1000
+            ? result
+            : result[..1000];
+    }
     private static string? NormalizeNullable(string? value)
     {
         var trimmed = value?.Trim();
@@ -507,3 +580,4 @@ public class VacacionesService : IVacacionesService
         int CicloLaboral,
         DateOnly FechaBase);
 }
+
