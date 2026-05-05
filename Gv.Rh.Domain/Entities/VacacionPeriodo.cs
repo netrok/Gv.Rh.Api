@@ -14,6 +14,13 @@ public class VacacionPeriodo
 
     public VacacionPolitica? VacacionPolitica { get; set; }
 
+    /// <summary>
+    /// Ciclo laboral del empleado.
+    /// Alta inicial = 1. Cada reingreso genera un nuevo ciclo.
+    /// Permite volver a AnioServicio = 1 sin mezclar historial anterior.
+    /// </summary>
+    public int CicloLaboral { get; set; } = 1;
+
     public int AnioServicio { get; set; }
 
     public DateOnly FechaInicio { get; set; }

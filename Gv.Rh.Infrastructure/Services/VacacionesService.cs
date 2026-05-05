@@ -27,39 +27,55 @@ public class VacacionesService : IVacacionesService
         if (empleado is null)
             throw new KeyNotFoundException("El empleado no existe.");
 
+        var cicloInfo = await ResolveCicloLaboralActualAsync(empleado, cancellationToken);
         var politica = await GetPoliticaVigenteAsync(cancellationToken);
+        var today = DateOnly.FromDateTime(DateTime.Today);
 
         var periodos = await _db.VacacionPeriodos
             .AsNoTracking()
             .Include(x => x.VacacionPolitica)
             .Where(x => x.EmpleadoId == empleadoId)
-            .OrderByDescending(x => x.AnioServicio)
+            .OrderByDescending(x => x.CicloLaboral)
+            .ThenByDescending(x => x.AnioServicio)
+            .ThenByDescending(x => x.FechaInicio)
             .ToListAsync(cancellationToken);
 
-        var periodoActual = periodos
+        var periodosCicloActual = periodos
+            .Where(x => x.CicloLaboral == cicloInfo.CicloLaboral)
+            .ToList();
+
+        var periodoActual = periodosCicloActual
             .OrderByDescending(x => x.AnioServicio)
             .FirstOrDefault(x => x.Estatus == EstatusVacacionPeriodo.ABIERTO)
-            ?? periodos.OrderByDescending(x => x.AnioServicio).FirstOrDefault();
+            ?? periodosCicloActual
+                .OrderByDescending(x => x.AnioServicio)
+                .FirstOrDefault();
 
         return new VacacionesResumenDto
         {
             EmpleadoId = empleado.Id,
             NumEmpleado = empleado.NumEmpleado,
             EmpleadoNombre = BuildNombreEmpleado(empleado),
-            FechaIngreso = empleado.FechaIngreso,
-            AntiguedadAnios = CalcularAniosServicioCumplidos(empleado.FechaIngreso, DateOnly.FromDateTime(DateTime.Today)),
-            ProximoAniversario = CalcularProximoAniversario(empleado.FechaIngreso, DateOnly.FromDateTime(DateTime.Today)),
+
+            // Para vacaciones usamos la fecha base del ciclo laboral actual.
+            // Ciclo 1 = FechaIngreso. Ciclo 2+ = último reingreso.
+            FechaIngreso = cicloInfo.FechaBase,
+
+            AntiguedadAnios = CalcularAniosServicioCumplidos(cicloInfo.FechaBase, today),
+            ProximoAniversario = CalcularProximoAniversario(cicloInfo.FechaBase, today),
+
             PoliticaId = politica.Id,
             PoliticaNombre = politica.Nombre,
             PrimaVacacionalPorcentaje = politica.PrimaVacacionalPorcentaje,
-            DiasDerechoTotal = periodos.Sum(x => x.DiasDerecho),
-            DiasTomadosTotal = periodos.Sum(x => x.DiasTomados),
-            DiasPagadosTotal = periodos.Sum(x => x.DiasPagados),
-            DiasAjustadosTotal = periodos.Sum(x => x.DiasAjustados),
-            DiasVencidosTotal = periodos.Sum(x => x.DiasVencidos),
-            SaldoDisponible = periodos.Sum(x => x.Saldo),
-            PeriodosTotales = periodos.Count,
-            PeriodosAbiertos = periodos.Count(x => x.Estatus == EstatusVacacionPeriodo.ABIERTO),
+
+            DiasDerechoTotal = periodosCicloActual.Sum(x => x.DiasDerecho),
+            DiasTomadosTotal = periodosCicloActual.Sum(x => x.DiasTomados),
+            DiasPagadosTotal = periodosCicloActual.Sum(x => x.DiasPagados),
+            DiasAjustadosTotal = periodosCicloActual.Sum(x => x.DiasAjustados),
+            DiasVencidosTotal = periodosCicloActual.Sum(x => x.DiasVencidos),
+            SaldoDisponible = periodosCicloActual.Sum(x => x.Saldo),
+            PeriodosTotales = periodosCicloActual.Count,
+            PeriodosAbiertos = periodosCicloActual.Count(x => x.Estatus == EstatusVacacionPeriodo.ABIERTO),
             PeriodoActual = periodoActual is null ? null : ToPeriodoDto(periodoActual)
         };
     }
@@ -74,7 +90,8 @@ public class VacacionesService : IVacacionesService
             .AsNoTracking()
             .Include(x => x.VacacionPolitica)
             .Where(x => x.EmpleadoId == empleadoId)
-            .OrderByDescending(x => x.AnioServicio)
+            .OrderByDescending(x => x.CicloLaboral)
+            .ThenByDescending(x => x.AnioServicio)
             .ThenByDescending(x => x.FechaInicio)
             .Select(x => ToPeriodoDto(x))
             .ToListAsync(cancellationToken);
@@ -90,7 +107,8 @@ public class VacacionesService : IVacacionesService
             .AsNoTracking()
             .Include(x => x.VacacionPeriodo)
             .Where(x => x.EmpleadoId == empleadoId)
-            .OrderByDescending(x => x.FechaMovimiento)
+            .OrderByDescending(x => x.CicloLaboral)
+            .ThenByDescending(x => x.FechaMovimiento)
             .ThenByDescending(x => x.CreatedAtUtc)
             .ThenByDescending(x => x.Id)
             .Select(x => ToMovimientoDto(x))
@@ -112,11 +130,12 @@ public class VacacionesService : IVacacionesService
         if (!empleado.Activo)
             throw new InvalidOperationException("No se puede generar periodo de vacaciones para un empleado inactivo.");
 
+        var cicloInfo = await ResolveCicloLaboralActualAsync(empleado, cancellationToken);
         var today = DateOnly.FromDateTime(DateTime.Today);
-        var aniosCumplidos = CalcularAniosServicioCumplidos(empleado.FechaIngreso, today);
+        var aniosCumplidos = CalcularAniosServicioCumplidos(cicloInfo.FechaBase, today);
 
         if (aniosCumplidos < 1 && !request.AnioServicio.HasValue)
-            throw new InvalidOperationException("El empleado aún no cumple un año de servicio.");
+            throw new InvalidOperationException("El empleado aún no cumple un año de servicio en el ciclo laboral actual.");
 
         var anioServicio = request.AnioServicio ?? aniosCumplidos;
 
@@ -126,7 +145,10 @@ public class VacacionesService : IVacacionesService
         var existente = await _db.VacacionPeriodos
             .Include(x => x.VacacionPolitica)
             .FirstOrDefaultAsync(
-                x => x.EmpleadoId == empleadoId && x.AnioServicio == anioServicio,
+                x =>
+                    x.EmpleadoId == empleadoId &&
+                    x.CicloLaboral == cicloInfo.CicloLaboral &&
+                    x.AnioServicio == anioServicio,
                 cancellationToken);
 
         if (existente is not null)
@@ -135,8 +157,8 @@ public class VacacionesService : IVacacionesService
         var politica = await GetPoliticaVigenteAsync(cancellationToken);
         var diasDerecho = ResolverDiasVacaciones(politica, anioServicio);
 
-        var fechaInicio = empleado.FechaIngreso.AddYears(anioServicio - 1);
-        var fechaFin = empleado.FechaIngreso.AddYears(anioServicio).AddDays(-1);
+        var fechaInicio = cicloInfo.FechaBase.AddYears(anioServicio - 1);
+        var fechaFin = cicloInfo.FechaBase.AddYears(anioServicio).AddDays(-1);
         var fechaLimiteDisfrute = fechaFin.AddMonths(6);
         var now = DateTime.UtcNow;
 
@@ -146,6 +168,7 @@ public class VacacionesService : IVacacionesService
         {
             EmpleadoId = empleadoId,
             VacacionPoliticaId = politica.Id,
+            CicloLaboral = cicloInfo.CicloLaboral,
             AnioServicio = anioServicio,
             FechaInicio = fechaInicio,
             FechaFin = fechaFin,
@@ -170,13 +193,15 @@ public class VacacionesService : IVacacionesService
         {
             EmpleadoId = empleadoId,
             VacacionPeriodoId = periodo.Id,
+            CicloLaboral = periodo.CicloLaboral,
             TipoMovimiento = TipoMovimientoVacacion.APERTURA,
             FechaMovimiento = fechaFin,
             Dias = diasDerecho,
             SaldoAntes = 0m,
             SaldoDespues = diasDerecho,
-            Referencia = $"PERIODO-{anioServicio}",
-            Comentario = NormalizeNullable(request.Comentario) ?? $"Apertura automática del periodo de vacaciones año servicio {anioServicio}.",
+            Referencia = $"CICLO-{periodo.CicloLaboral}-PERIODO-{anioServicio}",
+            Comentario = NormalizeNullable(request.Comentario)
+                ?? $"Apertura automática del periodo de vacaciones ciclo {periodo.CicloLaboral}, año servicio {anioServicio}.",
             UsuarioResponsableId = usuarioResponsableId,
             Origen = "SISTEMA",
             CreatedAtUtc = now
@@ -221,6 +246,7 @@ public class VacacionesService : IVacacionesService
         {
             EmpleadoId = empleadoId,
             VacacionPeriodoId = periodo.Id,
+            CicloLaboral = periodo.CicloLaboral,
             TipoMovimiento = TipoMovimientoVacacion.DISFRUTE,
             FechaMovimiento = request.FechaInicioDisfrute,
             FechaInicioDisfrute = request.FechaInicioDisfrute,
@@ -271,6 +297,7 @@ public class VacacionesService : IVacacionesService
         {
             EmpleadoId = empleadoId,
             VacacionPeriodoId = periodo.Id,
+            CicloLaboral = periodo.CicloLaboral,
             TipoMovimiento = request.Dias > 0
                 ? TipoMovimientoVacacion.AJUSTE_POSITIVO
                 : TipoMovimientoVacacion.AJUSTE_NEGATIVO,
@@ -320,6 +347,32 @@ public class VacacionesService : IVacacionesService
             throw new InvalidOperationException("Solo se pueden registrar movimientos en periodos abiertos.");
 
         return periodo;
+    }
+
+    private async Task<VacacionCicloLaboralInfo> ResolveCicloLaboralActualAsync(
+        Empleado empleado,
+        CancellationToken cancellationToken)
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+
+        var reingresos = await _db.EmpleadoMovimientosLaborales
+            .AsNoTracking()
+            .Where(x =>
+                x.EmpleadoId == empleado.Id &&
+                x.TipoMovimiento == TipoMovimientoLaboral.REINGRESO &&
+                x.FechaMovimiento <= today)
+            .OrderBy(x => x.FechaMovimiento)
+            .ThenBy(x => x.Id)
+            .Select(x => x.FechaMovimiento)
+            .ToListAsync(cancellationToken);
+
+        var cicloLaboral = reingresos.Count + 1;
+        var fechaBase = reingresos.LastOrDefault();
+
+        if (fechaBase == default)
+            fechaBase = empleado.FechaIngreso;
+
+        return new VacacionCicloLaboralInfo(cicloLaboral, fechaBase);
     }
 
     private async Task<VacacionPolitica> GetPoliticaVigenteAsync(CancellationToken cancellationToken)
@@ -401,6 +454,7 @@ public class VacacionesService : IVacacionesService
             EmpleadoId = entity.EmpleadoId,
             VacacionPoliticaId = entity.VacacionPoliticaId,
             VacacionPoliticaNombre = entity.VacacionPolitica?.Nombre,
+            CicloLaboral = entity.CicloLaboral,
             AnioServicio = entity.AnioServicio,
             FechaInicio = entity.FechaInicio,
             FechaFin = entity.FechaFin,
@@ -427,6 +481,9 @@ public class VacacionesService : IVacacionesService
             Id = entity.Id,
             EmpleadoId = entity.EmpleadoId,
             VacacionPeriodoId = entity.VacacionPeriodoId,
+            CicloLaboral = entity.CicloLaboral != default
+                ? entity.CicloLaboral
+                : entity.VacacionPeriodo?.CicloLaboral ?? 1,
             AnioServicio = entity.VacacionPeriodo?.AnioServicio ?? 0,
             TipoMovimiento = entity.TipoMovimiento,
             FechaMovimiento = entity.FechaMovimiento,
@@ -445,4 +502,8 @@ public class VacacionesService : IVacacionesService
             CreatedAtUtc = entity.CreatedAtUtc
         };
     }
+
+    private sealed record VacacionCicloLaboralInfo(
+        int CicloLaboral,
+        DateOnly FechaBase);
 }

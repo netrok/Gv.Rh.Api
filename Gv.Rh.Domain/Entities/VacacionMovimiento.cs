@@ -14,6 +14,13 @@ public class VacacionMovimiento
 
     public VacacionPeriodo? VacacionPeriodo { get; set; }
 
+    /// <summary>
+    /// Ciclo laboral vigente al momento del movimiento.
+    /// Alta inicial = 1. Cada reingreso genera un nuevo ciclo.
+    /// Se copia desde VacacionPeriodo para facilitar reportes y auditoría.
+    /// </summary>
+    public int CicloLaboral { get; set; } = 1;
+
     public TipoMovimientoVacacion TipoMovimiento { get; set; }
 
     public DateOnly FechaMovimiento { get; set; }

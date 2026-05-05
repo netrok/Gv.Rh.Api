@@ -12,6 +12,10 @@ public class VacacionPeriodoConfiguration : IEntityTypeConfiguration<VacacionPer
         builder.ToTable("vacacion_periodos");
         builder.HasKey(x => x.Id);
 
+        builder.Property(x => x.CicloLaboral)
+            .IsRequired()
+            .HasDefaultValue(1);
+
         builder.Property(x => x.AnioServicio)
             .IsRequired();
 
@@ -88,9 +92,13 @@ public class VacacionPeriodoConfiguration : IEntityTypeConfiguration<VacacionPer
 
         builder.HasIndex(x => x.EmpleadoId);
         builder.HasIndex(x => x.VacacionPoliticaId);
+        builder.HasIndex(x => x.CicloLaboral);
         builder.HasIndex(x => x.AnioServicio);
         builder.HasIndex(x => x.Estatus);
-        builder.HasIndex(x => new { x.EmpleadoId, x.AnioServicio }).IsUnique();
-        builder.HasIndex(x => new { x.EmpleadoId, x.FechaInicio, x.FechaFin });
+
+        builder.HasIndex(x => new { x.EmpleadoId, x.CicloLaboral, x.AnioServicio })
+            .IsUnique();
+
+        builder.HasIndex(x => new { x.EmpleadoId, x.CicloLaboral, x.FechaInicio, x.FechaFin });
     }
 }

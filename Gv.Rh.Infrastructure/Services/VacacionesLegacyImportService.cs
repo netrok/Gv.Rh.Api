@@ -332,15 +332,21 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
                 continue;
             }
 
+            var cicloInfo = await ResolveCicloLaboralActualAsync(empleado, cancellationToken);
+
             var hasPeriodos = await _db.VacacionPeriodos
                 .AsNoTracking()
-                .AnyAsync(x => x.EmpleadoId == empleado.Id, cancellationToken);
+                .AnyAsync(
+                    x =>
+                        x.EmpleadoId == empleado.Id &&
+                        x.CicloLaboral == cicloInfo.CicloLaboral,
+                    cancellationToken);
 
             if (hasPeriodos)
             {
                 confirmItem.Importado = false;
                 confirmItem.Accion = "OMITIDO";
-                confirmItem.Error = "El empleado ya tiene periodos de vacaciones en el sistema.";
+                confirmItem.Error = "El empleado ya tiene periodos de vacaciones en el ciclo laboral actual.";
                 continue;
             }
 
@@ -351,10 +357,12 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
                 .Select(x => (int?)x.Id)
                 .FirstOrDefaultAsync(cancellationToken);
 
-            var anioServicio = item.AnioServicioSugerido.GetValueOrDefault(CalculateCurrentServiceYear(empleado.FechaIngreso));
+            var anioServicio = item.AnioServicioSugerido.GetValueOrDefault(
+                CalculateCurrentServiceYear(cicloInfo.FechaBase));
+
             anioServicio = Math.Max(1, anioServicio);
 
-            var fechaInicio = empleado.FechaIngreso.AddYears(anioServicio - 1);
+            var fechaInicio = cicloInfo.FechaBase.AddYears(anioServicio - 1);
             var fechaFin = fechaInicio.AddYears(1).AddDays(-1);
             var fechaLimiteDisfrute = fechaFin.AddMonths(6);
 
@@ -368,6 +376,7 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
             {
                 EmpleadoId = empleado.Id,
                 VacacionPoliticaId = politicaId,
+                CicloLaboral = cicloInfo.CicloLaboral,
                 AnioServicio = anioServicio,
                 FechaInicio = fechaInicio,
                 FechaFin = fechaFin,
@@ -393,6 +402,7 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
             {
                 EmpleadoId = empleado.Id,
                 VacacionPeriodoId = periodo.Id,
+                CicloLaboral = periodo.CicloLaboral,
                 TipoMovimiento = TipoMovimientoVacacion.SALDO_INICIAL,
                 FechaMovimiento = today,
                 FechaInicioDisfrute = null,
@@ -400,7 +410,7 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
                 Dias = saldo,
                 SaldoAntes = 0m,
                 SaldoDespues = saldo,
-                Referencia = "IMPORTACION_LEGACY",
+                Referencia = $"CICLO-{periodo.CicloLaboral}-IMPORTACION_LEGACY",
                 Comentario = comentarioBase,
                 UsuarioResponsableId = usuarioResponsableId,
                 Origen = "EXCEL_LEGACY",
@@ -1181,4 +1191,35 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
                 ApellidoMaterno
             }.Where(x => !string.IsNullOrWhiteSpace(x)));
     }
+    private async Task<VacacionCicloLaboralInfo> ResolveCicloLaboralActualAsync(
+        Empleado empleado,
+        CancellationToken cancellationToken)
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+
+        var reingresos = await _db.EmpleadoMovimientosLaborales
+            .AsNoTracking()
+            .Where(x =>
+                x.EmpleadoId == empleado.Id &&
+                x.TipoMovimiento == TipoMovimientoLaboral.REINGRESO &&
+                x.FechaMovimiento <= today)
+            .OrderBy(x => x.FechaMovimiento)
+            .ThenBy(x => x.Id)
+            .Select(x => x.FechaMovimiento)
+            .ToListAsync(cancellationToken);
+
+        var cicloLaboral = reingresos.Count + 1;
+        var fechaBase = reingresos.LastOrDefault();
+
+        if (fechaBase == default)
+            fechaBase = empleado.FechaIngreso;
+
+        return new VacacionCicloLaboralInfo(cicloLaboral, fechaBase);
+    }
+
+    private sealed record VacacionCicloLaboralInfo(
+        int CicloLaboral,
+        DateOnly FechaBase);
 }
+
+

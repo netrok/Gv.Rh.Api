@@ -12,6 +12,10 @@ public class VacacionMovimientoConfiguration : IEntityTypeConfiguration<Vacacion
         builder.ToTable("vacacion_movimientos");
         builder.HasKey(x => x.Id);
 
+        builder.Property(x => x.CicloLaboral)
+            .IsRequired()
+            .HasDefaultValue(1);
+
         builder.Property(x => x.TipoMovimiento)
             .HasConversion(
                 v => v.ToString(),
@@ -25,6 +29,7 @@ public class VacacionMovimientoConfiguration : IEntityTypeConfiguration<Vacacion
             .IsRequired();
 
         builder.Property(x => x.FechaInicioDisfrute);
+
         builder.Property(x => x.FechaFinDisfrute);
 
         builder.Property(x => x.Dias)
@@ -40,19 +45,19 @@ public class VacacionMovimientoConfiguration : IEntityTypeConfiguration<Vacacion
             .IsRequired();
 
         builder.Property(x => x.Referencia)
-            .HasMaxLength(120);
+            .HasMaxLength(180);
 
         builder.Property(x => x.Comentario)
-            .HasMaxLength(1000);
+            .HasMaxLength(8000);
 
         builder.Property(x => x.Origen)
-            .HasMaxLength(50);
+            .HasMaxLength(80);
 
         builder.Property(x => x.ImportacionArchivo)
-            .HasMaxLength(255);
+            .HasMaxLength(260);
 
         builder.Property(x => x.ImportacionHoja)
-            .HasMaxLength(120);
+            .HasMaxLength(160);
 
         builder.Property(x => x.ImportacionFila);
 
@@ -76,9 +81,13 @@ public class VacacionMovimientoConfiguration : IEntityTypeConfiguration<Vacacion
 
         builder.HasIndex(x => x.EmpleadoId);
         builder.HasIndex(x => x.VacacionPeriodoId);
+        builder.HasIndex(x => x.UsuarioResponsableId);
+        builder.HasIndex(x => x.CicloLaboral);
         builder.HasIndex(x => x.TipoMovimiento);
         builder.HasIndex(x => x.FechaMovimiento);
-        builder.HasIndex(x => x.CreatedAtUtc);
-        builder.HasIndex(x => new { x.EmpleadoId, x.FechaMovimiento });
+        builder.HasIndex(x => x.Origen);
+
+        builder.HasIndex(x => new { x.EmpleadoId, x.CicloLaboral, x.FechaMovimiento });
+        builder.HasIndex(x => new { x.VacacionPeriodoId, x.FechaMovimiento });
     }
 }
