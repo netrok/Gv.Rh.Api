@@ -16,6 +16,9 @@ public sealed class VacacionesKardexReporteRowDto
     public bool Activo { get; set; }
 
     public int VacacionPeriodoId { get; set; }
+
+    public int CicloLaboral { get; set; }
+
     public int AnioServicio { get; set; }
 
     public DateOnly PeriodoFechaInicio { get; set; }

@@ -16,6 +16,9 @@ public sealed class VacacionesSaldosReporteRowDto
     public DateOnly FechaIngreso { get; set; }
 
     public int VacacionPeriodoId { get; set; }
+
+    public int CicloLaboral { get; set; }
+
     public int AnioServicio { get; set; }
 
     public DateOnly FechaInicio { get; set; }
