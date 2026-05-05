@@ -57,9 +57,13 @@ public class VacacionesService : IVacacionesService
             NumEmpleado = empleado.NumEmpleado,
             EmpleadoNombre = BuildNombreEmpleado(empleado),
 
+            FechaIngresoOriginal = empleado.FechaIngreso,
+
             // Para vacaciones usamos la fecha base del ciclo laboral actual.
             // Ciclo 1 = FechaIngreso. Ciclo 2+ = último reingreso.
             FechaIngreso = cicloInfo.FechaBase,
+            CicloLaboralActual = cicloInfo.CicloLaboral,
+            FechaBaseCicloLaboral = cicloInfo.FechaBase,
 
             AntiguedadAnios = CalcularAniosServicioCumplidos(cicloInfo.FechaBase, today),
             ProximoAniversario = CalcularProximoAniversario(cicloInfo.FechaBase, today),
@@ -320,7 +324,6 @@ public class VacacionesService : IVacacionesService
         return ToMovimientoDto(movimiento);
     }
 
-
     public async Task<int> CerrarPeriodosAbiertosPorBajaAsync(
         int empleadoId,
         DateOnly fechaBaja,
@@ -376,6 +379,7 @@ public class VacacionesService : IVacacionesService
 
         return periodos.Count;
     }
+
     private async Task EnsureEmpleadoExistsAsync(int empleadoId, CancellationToken cancellationToken)
     {
         var exists = await _db.Empleados
@@ -496,7 +500,6 @@ public class VacacionesService : IVacacionesService
         return string.Join(" ", parts);
     }
 
-
     private static string? AppendVacacionComentario(string? comentarioActual, string comentarioNuevo)
     {
         var actual = NormalizeNullable(comentarioActual);
@@ -513,6 +516,7 @@ public class VacacionesService : IVacacionesService
             ? result
             : result[..1000];
     }
+
     private static string? NormalizeNullable(string? value)
     {
         var trimmed = value?.Trim();
@@ -580,4 +584,3 @@ public class VacacionesService : IVacacionesService
         int CicloLaboral,
         DateOnly FechaBase);
 }
-
