@@ -187,6 +187,7 @@ builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteSer
 // Módulo Vacaciones / Kárdex
 builder.Services.AddScoped<IVacacionesService, VacacionesService>();
 builder.Services.AddScoped<IVacacionesDashboardService, VacacionesDashboardService>();
+builder.Services.AddScoped<IVacacionesSolicitudesService, VacacionesSolicitudesService>();
 builder.Services.AddScoped<IVacacionesLegacyImportService, VacacionesLegacyImportService>();
 
 // Módulo Cumpleaños

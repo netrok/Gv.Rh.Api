@@ -1,4 +1,4 @@
-﻿using Gv.Rh.Domain.Common;
+using Gv.Rh.Domain.Common;
 using Gv.Rh.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -26,6 +26,7 @@ public class RhDbContext : DbContext
     public DbSet<VacacionPoliticaDetalle> VacacionPoliticaDetalles => Set<VacacionPoliticaDetalle>();
     public DbSet<VacacionPeriodo> VacacionPeriodos => Set<VacacionPeriodo>();
     public DbSet<VacacionMovimiento> VacacionMovimientos => Set<VacacionMovimiento>();
+    public DbSet<VacacionSolicitud> VacacionSolicitudes => Set<VacacionSolicitud>();
 
     // ===== Reclutamiento =====
     public DbSet<Vacante> Vacantes => Set<Vacante>();
