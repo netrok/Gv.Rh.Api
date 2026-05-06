@@ -1,4 +1,5 @@
-﻿using Gv.Rh.Api.Contracts.EmpleadoDocumentos;
+using Gv.Rh.Application.Interfaces;
+using Gv.Rh.Api.Contracts.EmpleadoDocumentos;
 using Gv.Rh.Api.Services;
 using Gv.Rh.Application.DTOs.EmpleadosDocumentos;
 using Gv.Rh.Domain.Common;
@@ -32,14 +33,18 @@ public class EmpleadoDocumentosController : ControllerBase
         new(TipoDocumentoEmpleado.CertificadoMedico, false),
         new(TipoDocumentoEmpleado.Otro, false),
     ];
+    private readonly IEmpleadoAccessScopeService _empleadoAccessScopeService;
+
 
     public EmpleadoDocumentosController(
         RhDbContext db,
-        IEmpleadoDocumentoStorageService storage)
+        IEmpleadoDocumentoStorageService storage,
+        IEmpleadoAccessScopeService empleadoAccessScopeService)
     {
         _db = db;
         _storage = storage;
-    }
+            _empleadoAccessScopeService = empleadoAccessScopeService;
+}
 
     [HttpGet("Empleados/{empleadoId:int}/documentos")]
     public async Task<ActionResult<List<EmpleadoDocumentoDto>>> GetByEmpleado(
@@ -402,16 +407,19 @@ public class EmpleadoDocumentosController : ControllerBase
         int empleadoId,
         CancellationToken cancellationToken)
     {
-        if (CurrentUserHasAnyRole("ADMIN", "RRHH"))
+        if (_empleadoAccessScopeService.IsAdminOrRrhh(User))
+        {
             return null;
+        }
 
-        // Cualquier usuario autenticado que NO sea ADMIN/RRHH solo puede acceder
-        // al expediente ligado a su propia cuenta. No dependemos del nombre del rol
-        // porque algunos JWT pueden traer el rol en claims no estándar.
-        var linkedEmpleadoId = await ResolveCurrentEmpleadoIdAsync(cancellationToken);
+        var linkedEmpleadoId = await _empleadoAccessScopeService.ResolveCurrentEmpleadoIdAsync(
+            User,
+            cancellationToken);
 
         if (!linkedEmpleadoId.HasValue || linkedEmpleadoId.Value != empleadoId)
+        {
             return Forbid();
+        }
 
         return null;
     }

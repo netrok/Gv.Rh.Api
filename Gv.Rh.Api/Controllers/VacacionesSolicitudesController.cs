@@ -17,13 +17,16 @@ public sealed class VacacionesSolicitudesController : ControllerBase
     private readonly IVacacionesSolicitudesService _solicitudesService;
     private readonly RhDbContext _db;
 
-    public VacacionesSolicitudesController(
+        private readonly IEmpleadoAccessScopeService _empleadoAccessScopeService;
+public VacacionesSolicitudesController(
         IVacacionesSolicitudesService solicitudesService,
-        RhDbContext db)
+        RhDbContext db,
+        IEmpleadoAccessScopeService empleadoAccessScopeService)
     {
         _solicitudesService = solicitudesService;
         _db = db;
-    }
+            _empleadoAccessScopeService = empleadoAccessScopeService;
+}
 
     [HttpGet]
     [ProducesResponseType(typeof(VacacionesSolicitudListResultDto), StatusCodes.Status200OK)]
@@ -228,19 +231,9 @@ public sealed class VacacionesSolicitudesController : ControllerBase
             User.FindFirstValue("http://schemas.microsoft.com/ws/2008/06/identity/claims/role") ??
             string.Empty;
 
-        var userId = TryGetIntClaimValue(
-            ClaimTypes.NameIdentifier,
-            "sub",
-            "uid",
-            "userId",
-            "UserId",
-            "id");
+        var userId = _empleadoAccessScopeService.GetCurrentUserId(User);
 
-        int? empleadoIdFromClaim = TryGetIntClaimValue(
-            "empleadoId",
-            "EmpleadoId",
-            "employeeId",
-            "EmployeeId");
+        var empleadoIdFromClaim = await _empleadoAccessScopeService.ResolveCurrentEmpleadoIdAsync(User, cancellationToken);
 
         var userQuery = _db.Users.AsNoTracking();
 

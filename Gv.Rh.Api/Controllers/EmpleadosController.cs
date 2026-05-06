@@ -1,4 +1,4 @@
-﻿using Gv.Rh.Application.Abstractions.Reports;
+using Gv.Rh.Application.Abstractions.Reports;
 using Gv.Rh.Application.DTOs.Empleados;
 using Gv.Rh.Application.DTOs.Empleados.Import;
 using Gv.Rh.Application.Interfaces;
@@ -52,6 +52,8 @@ public class EmpleadosController : ControllerBase
         new(@"^\d{10,15}$", RegexOptions.Compiled);
 
     private const long MaxImportFileBytes = 10 * 1024 * 1024; // 10 MB
+    private readonly IEmpleadoAccessScopeService _empleadoAccessScopeService;
+
 
     public EmpleadosController(
         RhDbContext db,
@@ -61,10 +63,12 @@ public class EmpleadosController : ControllerBase
         IEmpleadoNumberService empleadoNumberService,
         IEmpleadoImportService empleadoImportService,
         IEmpleadoMovimientoLaboralService empleadoMovimientoLaboralService,
-        IVacacionesService vacacionesService)
+        IVacacionesService vacacionesService,
+        IEmpleadoAccessScopeService empleadoAccessScopeService)
     {
         _db = db;
-        _env = env;
+                _empleadoAccessScopeService = empleadoAccessScopeService;
+_env = env;
         _empleadosReportService = empleadosReportService;
         _empleadoFichaReportService = empleadoFichaReportService;
         _empleadoNumberService = empleadoNumberService;
@@ -1402,18 +1406,12 @@ public class EmpleadosController : ControllerBase
 
     private async Task<IActionResult?> EnsureCanAccessEmpleadoAsync(int empleadoId)
     {
-        if (CurrentUserHasAnyRole("ADMIN", "RRHH"))
-            return null;
+        var canView = await _empleadoAccessScopeService.CanViewEmpleadoAsync(
+            User,
+            empleadoId,
+            HttpContext.RequestAborted);
 
-        // Cualquier usuario autenticado que NO sea ADMIN/RRHH solo puede acceder
-        // al expediente ligado a su propia cuenta. No dependemos del nombre del rol
-        // porque algunos JWT pueden traer el rol en claims no estándar.
-        var linkedEmpleadoId = await ResolveCurrentEmpleadoIdAsync(HttpContext.RequestAborted);
-
-        if (!linkedEmpleadoId.HasValue || linkedEmpleadoId.Value != empleadoId)
-            return Forbid();
-
-        return null;
+        return canView ? null : Forbid();
     }
 
     private bool CurrentUserHasAnyRole(params string[] roles)

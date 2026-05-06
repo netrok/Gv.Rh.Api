@@ -1,4 +1,4 @@
-﻿using Gv.Rh.Application.Interfaces;
+using Gv.Rh.Application.Interfaces;
 using Gv.Rh.Domain.Common;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -21,6 +21,12 @@ public sealed class IncidenciaAuthorizationService : IIncidenciaAuthorizationSer
     {
         var role = GetRole(principal);
         return UserRoles.IsAdmin(role) || UserRoles.IsRrhh(role);
+    }
+
+    public bool IsJefe(ClaimsPrincipal principal)
+    {
+        var role = UserRoles.Normalize(GetRole(principal));
+        return string.Equals(role, "JEFE", StringComparison.OrdinalIgnoreCase);
     }
 
     public int? GetCurrentUserId(ClaimsPrincipal principal)

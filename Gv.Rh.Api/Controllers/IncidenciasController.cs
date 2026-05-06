@@ -1,4 +1,4 @@
-﻿using Gv.Rh.Application.Abstractions.Reports;
+using Gv.Rh.Application.Abstractions.Reports;
 using Gv.Rh.Application.DTOs.Incidencias;
 using Gv.Rh.Application.Interfaces;
 using Gv.Rh.Domain.Common.Enums;
@@ -19,6 +19,7 @@ public class IncidenciasController : ControllerBase
     private readonly RhDbContext _context;
     private readonly IIncidenciasReportService _incidenciasReportService;
     private readonly IIncidenciaAuthorizationService _incidenciaAuthorizationService;
+    private readonly IEmpleadoAccessScopeService _empleadoAccessScopeService;
 
     public sealed record ResolverIncidenciaDto(string? Comentario);
 
@@ -40,14 +41,17 @@ public class IncidenciasController : ControllerBase
     public IncidenciasController(
         RhDbContext context,
         IIncidenciasReportService incidenciasReportService,
-        IIncidenciaAuthorizationService incidenciaAuthorizationService)
+        IIncidenciaAuthorizationService incidenciaAuthorizationService,
+        IEmpleadoAccessScopeService empleadoAccessScopeService)
     {
         _context = context;
         _incidenciasReportService = incidenciasReportService;
         _incidenciaAuthorizationService = incidenciaAuthorizationService;
+        _empleadoAccessScopeService = empleadoAccessScopeService;
     }
 
     [HttpGet]
+    [Authorize(Roles = "ADMIN,RRHH,JEFE,EMPLEADO")]
     public async Task<ActionResult<IEnumerable<IncidenciaDto>>> GetAll(
         [FromQuery] IncidenciaQueryDto query,
         CancellationToken cancellationToken)
@@ -103,6 +107,7 @@ public class IncidenciasController : ControllerBase
     }
 
     [HttpGet("{id:int}")]
+    [Authorize(Roles = "ADMIN,RRHH,JEFE,EMPLEADO")]
     public async Task<ActionResult<IncidenciaDto>> GetById(int id, CancellationToken cancellationToken)
     {
         var canView = await _incidenciaAuthorizationService.CanViewAsync(User, id, cancellationToken);
@@ -308,6 +313,7 @@ public class IncidenciasController : ControllerBase
     }
 
     [HttpPost("{id:int}/aprobar")]
+    [Authorize(Roles = "ADMIN,RRHH,JEFE")]
     public async Task<IActionResult> Aprobar(
         int id,
         [FromBody] ResolverIncidenciaDto? dto,
@@ -328,8 +334,8 @@ public class IncidenciasController : ControllerBase
             return BadRequest(new { message = "Solo se pueden aprobar incidencias en estatus PENDIENTE." });
 
         entity.Estatus = EstatusIncidencia.APROBADA;
-        entity.ResueltaPorUsuarioId = _incidenciaAuthorizationService.GetCurrentUserId(User);
-        entity.ResueltaPorEmpleadoId = _incidenciaAuthorizationService.GetCurrentEmpleadoId(User);
+        entity.ResueltaPorUsuarioId = _empleadoAccessScopeService.GetCurrentUserId(User);
+        entity.ResueltaPorEmpleadoId = _empleadoAccessScopeService.GetCurrentEmpleadoIdFromClaims(User);
         entity.FechaResolucionUtc = DateTime.UtcNow;
         entity.ComentarioResolucion = NormalizeNullable(dto?.Comentario);
         entity.UpdatedAtUtc = DateTime.UtcNow;
@@ -340,6 +346,7 @@ public class IncidenciasController : ControllerBase
     }
 
     [HttpPost("{id:int}/rechazar")]
+    [Authorize(Roles = "ADMIN,RRHH,JEFE")]
     public async Task<IActionResult> Rechazar(
         int id,
         [FromBody] ResolverIncidenciaDto? dto,
@@ -360,8 +367,8 @@ public class IncidenciasController : ControllerBase
             return BadRequest(new { message = "Solo se pueden rechazar incidencias en estatus PENDIENTE." });
 
         entity.Estatus = EstatusIncidencia.RECHAZADA;
-        entity.ResueltaPorUsuarioId = _incidenciaAuthorizationService.GetCurrentUserId(User);
-        entity.ResueltaPorEmpleadoId = _incidenciaAuthorizationService.GetCurrentEmpleadoId(User);
+        entity.ResueltaPorUsuarioId = _empleadoAccessScopeService.GetCurrentUserId(User);
+        entity.ResueltaPorEmpleadoId = _empleadoAccessScopeService.GetCurrentEmpleadoIdFromClaims(User);
         entity.FechaResolucionUtc = DateTime.UtcNow;
         entity.ComentarioResolucion = NormalizeNullable(dto?.Comentario);
         entity.UpdatedAtUtc = DateTime.UtcNow;
@@ -566,21 +573,7 @@ public class IncidenciasController : ControllerBase
 
     private IQueryable<Incidencia> ApplyAccessScope(IQueryable<Incidencia> query)
     {
-        if (_incidenciaAuthorizationService.IsAdminOrRrhh(User))
-        {
-            return query;
-        }
-
-        var empleadoId = _incidenciaAuthorizationService.GetCurrentEmpleadoId(User);
-        if (!empleadoId.HasValue)
-        {
-            return query.Where(x => false);
-        }
-
-        return query.Where(x =>
-            x.EmpleadoId == empleadoId.Value ||
-            x.Empleado.AprobadorPrimarioEmpleadoId == empleadoId.Value ||
-            x.Empleado.AprobadorSecundarioEmpleadoId == empleadoId.Value);
+        return _empleadoAccessScopeService.ApplyIncidenciaScope(query, User);
     }
 
     private static string? NormalizeNullable(string? value)

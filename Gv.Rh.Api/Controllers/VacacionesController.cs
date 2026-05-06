@@ -1,4 +1,4 @@
-﻿using Gv.Rh.Application.DTOs.Vacaciones;
+using Gv.Rh.Application.DTOs.Vacaciones;
 using Gv.Rh.Application.Interfaces;
 using Gv.Rh.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
@@ -15,14 +15,18 @@ public class VacacionesController : ControllerBase
 {
     private readonly IVacacionesService _vacacionesService;
     private readonly RhDbContext _db;
+    private readonly IEmpleadoAccessScopeService _empleadoAccessScopeService;
+
 
     public VacacionesController(
         IVacacionesService vacacionesService,
-        RhDbContext db)
+        RhDbContext db,
+        IEmpleadoAccessScopeService empleadoAccessScopeService)
     {
         _vacacionesService = vacacionesService;
         _db = db;
-    }
+            _empleadoAccessScopeService = empleadoAccessScopeService;
+}
 
     [HttpGet("Vacaciones/empleado/{empleadoId:int}/resumen")]
     public async Task<IActionResult> GetResumenEmpleado(
@@ -84,7 +88,7 @@ public class VacacionesController : ControllerBase
     [HttpGet("me/vacaciones/resumen")]
     public async Task<IActionResult> GetMiResumen(CancellationToken cancellationToken)
     {
-        var empleadoId = await ResolveCurrentEmpleadoIdAsync(cancellationToken);
+        var empleadoId = await _empleadoAccessScopeService.ResolveCurrentEmpleadoIdAsync(User, cancellationToken);
         if (!empleadoId.HasValue)
             return Forbid();
 
@@ -101,7 +105,7 @@ public class VacacionesController : ControllerBase
     [HttpGet("me/vacaciones/periodos")]
     public async Task<IActionResult> GetMisPeriodos(CancellationToken cancellationToken)
     {
-        var empleadoId = await ResolveCurrentEmpleadoIdAsync(cancellationToken);
+        var empleadoId = await _empleadoAccessScopeService.ResolveCurrentEmpleadoIdAsync(User, cancellationToken);
         if (!empleadoId.HasValue)
             return Forbid();
 
@@ -118,7 +122,7 @@ public class VacacionesController : ControllerBase
     [HttpGet("me/vacaciones/kardex")]
     public async Task<IActionResult> GetMiKardex(CancellationToken cancellationToken)
     {
-        var empleadoId = await ResolveCurrentEmpleadoIdAsync(cancellationToken);
+        var empleadoId = await _empleadoAccessScopeService.ResolveCurrentEmpleadoIdAsync(User, cancellationToken);
         if (!empleadoId.HasValue)
             return Forbid();
 
@@ -205,15 +209,12 @@ public class VacacionesController : ControllerBase
         int empleadoId,
         CancellationToken cancellationToken)
     {
-        if (CurrentUserHasAnyRole("ADMIN", "RRHH"))
-            return null;
+        var canView = await _empleadoAccessScopeService.CanViewEmpleadoAsync(
+            User,
+            empleadoId,
+            cancellationToken);
 
-        var linkedEmpleadoId = await ResolveCurrentEmpleadoIdAsync(cancellationToken);
-
-        if (!linkedEmpleadoId.HasValue || linkedEmpleadoId.Value != empleadoId)
-            return Forbid();
-
-        return null;
+        return canView ? null : Forbid();
     }
 
     private bool CurrentUserHasAnyRole(params string[] roles)

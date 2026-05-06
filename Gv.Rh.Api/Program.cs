@@ -164,6 +164,9 @@ builder.Services.AddScoped<TokenService>();
 
 builder.Services.AddScoped<IIncidenciaAuthorizationService, IncidenciaAuthorizationService>();
 
+
+builder.Services.AddScoped<IEmpleadoAccessScopeService, EmpleadoAccessScopeService>();
+
 // Reportes corporativos
 builder.Services.AddScoped<IIncidenciasReportService, IncidenciasReportService>();
 builder.Services.AddScoped<IEmpleadosReportService, EmpleadosReportService>();

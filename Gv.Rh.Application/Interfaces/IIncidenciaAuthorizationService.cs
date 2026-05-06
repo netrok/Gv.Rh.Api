@@ -1,10 +1,11 @@
-﻿using System.Security.Claims;
+using System.Security.Claims;
 
 namespace Gv.Rh.Application.Interfaces;
 
 public interface IIncidenciaAuthorizationService
 {
     bool IsAdminOrRrhh(ClaimsPrincipal principal);
+    bool IsJefe(ClaimsPrincipal principal);
     int? GetCurrentUserId(ClaimsPrincipal principal);
     int? GetCurrentEmpleadoId(ClaimsPrincipal principal);
 
