@@ -1,4 +1,4 @@
-﻿using ExcelDataReader;
+using ExcelDataReader;
 using Gv.Rh.Application.DTOs.Vacaciones.Import;
 using Gv.Rh.Application.Interfaces;
 using Gv.Rh.Domain.Common;
@@ -39,32 +39,11 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
 
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        var employees = await _db.Empleados
-            .AsNoTracking()
-            .Select(x => new EmployeeLookupRow
-            {
-                Id = x.Id,
-                NumEmpleado = x.NumEmpleado,
-                Nombres = x.Nombres,
-                ApellidoPaterno = x.ApellidoPaterno,
-                ApellidoMaterno = x.ApellidoMaterno,
-                Rfc = x.Rfc,
-                Nss = x.Nss,
-                FechaIngreso = x.FechaIngreso,
-                EstatusLaboralActual = x.EstatusLaboralActual
-            })
-            .ToListAsync(cancellationToken);
+        var employees = await LoadEmployeeLookupRowsAsync(cancellationToken);
 
-        var saldosByEmpleado = await _db.VacacionPeriodos
-            .AsNoTracking()
-            .GroupBy(x => x.EmpleadoId)
-            .Select(x => new SaldoSistemaEmpleado
-            {
-                EmpleadoId = x.Key,
-                Saldo = x.Sum(p => p.Saldo),
-                Periodos = x.Count()
-            })
-            .ToDictionaryAsync(x => x.EmpleadoId, x => x, cancellationToken);
+        var saldosByEmpleado = await BuildSaldosCicloActualByEmpleadoAsync(
+            employees,
+            cancellationToken);
 
         using var reader = ExcelReaderFactory.CreateReader(
             stream,
@@ -128,21 +107,7 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
     {
         var preview = await PreviewAsync(stream, fileName, cancellationToken);
 
-        var employees = await _db.Empleados
-            .AsNoTracking()
-            .Select(x => new EmployeeLookupRow
-            {
-                Id = x.Id,
-                NumEmpleado = x.NumEmpleado,
-                Nombres = x.Nombres,
-                ApellidoPaterno = x.ApellidoPaterno,
-                ApellidoMaterno = x.ApellidoMaterno,
-                Rfc = x.Rfc,
-                Nss = x.Nss,
-                FechaIngreso = x.FechaIngreso,
-                EstatusLaboralActual = x.EstatusLaboralActual
-            })
-            .ToListAsync(cancellationToken);
+        var employees = await LoadEmployeeLookupRowsAsync(cancellationToken);
 
         var result = new VacacionesLegacyConciliacionDto
         {
@@ -445,6 +410,100 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
         return result;
     }
 
+
+    private async Task<List<EmployeeLookupRow>> LoadEmployeeLookupRowsAsync(
+        CancellationToken cancellationToken)
+    {
+        var employees = await _db.Empleados
+            .AsNoTracking()
+            .Select(x => new EmployeeLookupRow
+            {
+                Id = x.Id,
+                NumEmpleado = x.NumEmpleado,
+                Nombres = x.Nombres,
+                ApellidoPaterno = x.ApellidoPaterno,
+                ApellidoMaterno = x.ApellidoMaterno,
+                Rfc = x.Rfc,
+                Nss = x.Nss,
+                FechaIngreso = x.FechaIngreso,
+                EstatusLaboralActual = x.EstatusLaboralActual
+            })
+            .ToListAsync(cancellationToken);
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+
+        var reingresos = await _db.EmpleadoMovimientosLaborales
+            .AsNoTracking()
+            .Where(x =>
+                x.TipoMovimiento == TipoMovimientoLaboral.REINGRESO &&
+                x.FechaMovimiento <= today)
+            .OrderBy(x => x.FechaMovimiento)
+            .ThenBy(x => x.Id)
+            .Select(x => new
+            {
+                x.EmpleadoId,
+                x.FechaMovimiento
+            })
+            .ToListAsync(cancellationToken);
+
+        var reingresosByEmpleado = reingresos
+            .GroupBy(x => x.EmpleadoId)
+            .ToDictionary(
+                x => x.Key,
+                x => x
+                    .OrderBy(r => r.FechaMovimiento)
+                    .Select(r => r.FechaMovimiento)
+                    .ToList());
+
+        foreach (var employee in employees)
+        {
+            if (!reingresosByEmpleado.TryGetValue(employee.Id, out var fechasReingreso) ||
+                fechasReingreso.Count == 0)
+            {
+                employee.CicloLaboralActual = 1;
+                employee.FechaBaseCicloLaboral = employee.FechaIngreso;
+                continue;
+            }
+
+            employee.CicloLaboralActual = fechasReingreso.Count + 1;
+            employee.FechaBaseCicloLaboral = fechasReingreso.Last();
+        }
+
+        return employees;
+    }
+
+    private async Task<Dictionary<int, SaldoSistemaEmpleado>> BuildSaldosCicloActualByEmpleadoAsync(
+        List<EmployeeLookupRow> employees,
+        CancellationToken cancellationToken)
+    {
+        var ciclosByEmpleado = employees.ToDictionary(
+            x => x.Id,
+            x => x.CicloLaboralActual);
+
+        var periodos = await _db.VacacionPeriodos
+            .AsNoTracking()
+            .Select(x => new
+            {
+                x.EmpleadoId,
+                x.CicloLaboral,
+                x.Saldo
+            })
+            .ToListAsync(cancellationToken);
+
+        return periodos
+            .Where(x =>
+                ciclosByEmpleado.TryGetValue(x.EmpleadoId, out var cicloActual) &&
+                x.CicloLaboral == cicloActual)
+            .GroupBy(x => x.EmpleadoId)
+            .ToDictionary(
+                x => x.Key,
+                x => new SaldoSistemaEmpleado
+                {
+                    EmpleadoId = x.Key,
+                    Saldo = x.Sum(p => p.Saldo),
+                    Periodos = x.Count()
+                });
+    }
     private static string BuildImportComment(string? comentarioUsuario, string? observacionesOriginales)
     {
         var parts = new List<string>
@@ -530,7 +589,7 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
         item.NumEmpleadoSistema = empleado.NumEmpleado;
         item.NombreSistema = empleado.NombreCompleto;
 
-        var anioServicio = CalculateCurrentServiceYear(empleado.FechaIngreso);
+        var anioServicio = CalculateCurrentServiceYear(empleado.FechaBaseCicloLaboral);
         item.AnioServicioSugerido = anioServicio;
 
         if (saldosByEmpleado.TryGetValue(empleado.Id, out var saldoSistema))
@@ -1179,6 +1238,11 @@ public sealed class VacacionesLegacyImportService : IVacacionesLegacyImportServi
         public string? Rfc { get; set; }
         public string? Nss { get; set; }
         public DateOnly FechaIngreso { get; set; }
+
+        public int CicloLaboralActual { get; set; } = 1;
+
+        public DateOnly FechaBaseCicloLaboral { get; set; }
+
         public EstatusLaboralEmpleado EstatusLaboralActual { get; set; } = EstatusLaboralEmpleado.ACTIVO;
 
         public string EstatusLaboral => EstatusLaboralActual.ToString();
