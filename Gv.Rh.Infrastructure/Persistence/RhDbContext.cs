@@ -27,6 +27,7 @@ public class RhDbContext : DbContext
     public DbSet<VacacionPeriodo> VacacionPeriodos => Set<VacacionPeriodo>();
     public DbSet<VacacionMovimiento> VacacionMovimientos => Set<VacacionMovimiento>();
     public DbSet<VacacionSolicitud> VacacionSolicitudes => Set<VacacionSolicitud>();
+    public DbSet<NotificacionOutbox> NotificacionesOutbox => Set<NotificacionOutbox>();
 
     // ===== Reclutamiento =====
     public DbSet<Vacante> Vacantes => Set<Vacante>();

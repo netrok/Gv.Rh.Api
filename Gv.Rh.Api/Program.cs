@@ -188,6 +188,7 @@ builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteSer
 builder.Services.AddScoped<IVacacionesService, VacacionesService>();
 builder.Services.AddScoped<IVacacionesDashboardService, VacacionesDashboardService>();
 builder.Services.AddScoped<IVacacionesSolicitudesService, VacacionesSolicitudesService>();
+builder.Services.AddScoped<IVacacionesSolicitudesNotificationService, VacacionesSolicitudesNotificationService>();
 builder.Services.AddScoped<IVacacionesLegacyImportService, VacacionesLegacyImportService>();
 
 // Módulo Cumpleaños
@@ -200,6 +201,7 @@ builder.Services.Configure<MicrosoftGraphMailOptions>(
 
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<IEmailService, MicrosoftGraphEmailService>();
+builder.Services.AddScoped<INotificationOutboxService, NotificationOutboxService>();
 
 // Notificaciones de expediente
 builder.Services.Configure<NotificationsOptions>(
@@ -207,6 +209,7 @@ builder.Services.Configure<NotificationsOptions>(
 
 builder.Services.AddScoped<IExpedienteNotificationService, ExpedienteNotificationService>();
 builder.Services.AddHostedService<ExpedienteNotificationHostedService>();
+builder.Services.AddHostedService<NotificationOutboxHostedService>();
 
 // DbContext PostgreSQL + interceptor de auditoría
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>

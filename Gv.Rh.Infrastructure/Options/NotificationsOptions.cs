@@ -1,4 +1,4 @@
-﻿namespace Gv.Rh.Infrastructure.Options;
+namespace Gv.Rh.Infrastructure.Options;
 
 public sealed class NotificationsOptions
 {
@@ -13,4 +13,16 @@ public sealed class NotificationsOptions
     public TimeOnly SchedulerTimeLocal { get; set; } = new(7, 0);
 
     public List<string> ExpedienteRecipients { get; set; } = [];
+
+    public List<string> VacacionesRecipients { get; set; } = [];
+
+    public bool OutboxEnabled { get; set; } = true;
+
+    public int OutboxPollingSeconds { get; set; } = 60;
+
+    public int OutboxBatchSize { get; set; } = 20;
+
+    public int OutboxMaxAttempts { get; set; } = 5;
+
+    public int OutboxRetryBaseMinutes { get; set; } = 5;
 }

@@ -11,10 +11,14 @@ namespace Gv.Rh.Infrastructure.Services;
 public sealed class VacacionesSolicitudesService : IVacacionesSolicitudesService
 {
     private readonly RhDbContext _db;
+    private readonly IVacacionesSolicitudesNotificationService _notificationService;
 
-    public VacacionesSolicitudesService(RhDbContext db)
+    public VacacionesSolicitudesService(
+        RhDbContext db,
+        IVacacionesSolicitudesNotificationService notificationService)
     {
         _db = db;
+        _notificationService = notificationService;
     }
 
     public async Task<VacacionesSolicitudListResultDto> GetSolicitudesAsync(
@@ -301,6 +305,11 @@ public sealed class VacacionesSolicitudesService : IVacacionesSolicitudesService
 
         await _db.SaveChangesAsync(cancellationToken);
 
+                await _notificationService.NotificarSolicitudResueltaAsync(
+            id,
+            EstatusVacacionSolicitud.RECHAZADA.ToString(),
+            cancellationToken);
+
         return await GetSolicitudByIdAsync(id, actor, cancellationToken);
     }
 
@@ -334,6 +343,11 @@ public sealed class VacacionesSolicitudesService : IVacacionesSolicitudesService
         solicitud.UpdatedAtUtc = now;
 
         await _db.SaveChangesAsync(cancellationToken);
+
+                await _notificationService.NotificarSolicitudResueltaAsync(
+            id,
+            EstatusVacacionSolicitud.CANCELADA.ToString(),
+            cancellationToken);
 
         return await GetSolicitudByIdAsync(id, actor, cancellationToken);
     }
