@@ -225,13 +225,29 @@ public sealed class EmpleadoAccessScopeService : IEmpleadoAccessScopeService
             return true;
         }
 
-        var scopedQuery = ApplyEmpleadoScope(
-            _db.Empleados.AsNoTracking(),
-            principal);
+        var currentEmpleadoId = await ResolveCurrentEmpleadoIdAsync(principal, cancellationToken);
 
-        return await scopedQuery.AnyAsync(x => x.Id == empleadoId, cancellationToken);
+        if (!currentEmpleadoId.HasValue || currentEmpleadoId.Value <= 0)
+        {
+            return false;
+        }
+
+        if (IsJefe(principal))
+        {
+            return await _db.Empleados
+                .AsNoTracking()
+                .AnyAsync(x =>
+                    x.Id == empleadoId &&
+                    (
+                        x.Id == currentEmpleadoId.Value ||
+                        x.AprobadorPrimarioEmpleadoId == currentEmpleadoId.Value ||
+                        x.AprobadorSecundarioEmpleadoId == currentEmpleadoId.Value
+                    ),
+                    cancellationToken);
+        }
+
+        return empleadoId == currentEmpleadoId.Value;
     }
-
     private static HashSet<string> GetRoles(ClaimsPrincipal principal)
     {
         return principal.Claims

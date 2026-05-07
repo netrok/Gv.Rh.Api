@@ -152,7 +152,7 @@ public class IncidenciasController : ControllerBase
     }
 
     [HttpPost]
-    [Authorize(Roles = "ADMIN,RRHH")]
+    [Authorize(Roles = "ADMIN,RRHH,JEFE")]
     public async Task<ActionResult<IncidenciaDto>> Create(
         [FromBody] CreateIncidenciaDto dto,
         CancellationToken cancellationToken)
