@@ -1,4 +1,4 @@
-using Gv.Rh.Api.Middlewares;
+﻿using Gv.Rh.Api.Middlewares;
 using Gv.Rh.Api.Services;
 using Gv.Rh.Application.Abstractions.Reports;
 using Gv.Rh.Application.Interfaces;
@@ -192,6 +192,7 @@ builder.Services.AddScoped<IVacacionesService, VacacionesService>();
 builder.Services.AddScoped<IVacacionesDashboardService, VacacionesDashboardService>();
 builder.Services.AddScoped<IVacacionesSolicitudesService, VacacionesSolicitudesService>();
 builder.Services.AddScoped<IVacacionesSolicitudesNotificationService, VacacionesSolicitudesNotificationService>();
+builder.Services.AddScoped<IAprobacionesNotificationService, AprobacionesNotificationService>();
 builder.Services.AddScoped<IVacacionesLegacyImportService, VacacionesLegacyImportService>();
 
 // Módulo Cumpleaños
