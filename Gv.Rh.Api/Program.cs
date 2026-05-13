@@ -213,6 +213,7 @@ builder.Services.Configure<NotificationsOptions>(
 
 builder.Services.AddScoped<IExpedienteNotificationService, ExpedienteNotificationService>();
 builder.Services.AddHostedService<ExpedienteNotificationHostedService>();
+builder.Services.AddHostedService<AprobacionesNotificationHostedService>();
 builder.Services.AddHostedService<NotificationOutboxHostedService>();
 
 // DbContext PostgreSQL + interceptor de auditoría
@@ -273,3 +274,4 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
+

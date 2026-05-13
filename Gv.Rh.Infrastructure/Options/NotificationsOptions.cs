@@ -12,6 +12,10 @@ public sealed class NotificationsOptions
 
     public TimeOnly SchedulerTimeLocal { get; set; } = new(7, 0);
 
+    public bool AprobacionesSchedulerEnabled { get; set; } = false;
+
+    public TimeOnly AprobacionesSchedulerTimeLocal { get; set; } = new(8, 0);
+
     public List<string> ExpedienteRecipients { get; set; } = [];
 
     public List<string> VacacionesRecipients { get; set; } = [];
