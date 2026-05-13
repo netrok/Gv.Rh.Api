@@ -23,7 +23,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore dependencies
-        run: dotnet restore Gv.Rh.Api.sln
+        run: dotnet restore Gv.Rh.Api/Gv.Rh.Api.csproj
 
-      - name: Build solution
-        run: dotnet build Gv.Rh.Api.sln --configuration Release --no-restore
+      - name: Build API project
+        run: dotnet build Gv.Rh.Api/Gv.Rh.Api.csproj --configuration Release --no-restore
