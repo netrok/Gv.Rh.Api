@@ -24,6 +24,7 @@ jobs:
           PROJECT_DIR="/opt/gv-rh-demo"
           API_REPO_DIR="$PROJECT_DIR/api"
           BACKUP_DIR="$PROJECT_DIR/backups"
+          RESTORE_LIST="/tmp/gv_rh_restore_list_migrations.txt"
 
           echo "Starting EF Core migration workflow"
           echo "Reason: ${{ github.event.inputs.note }}"
@@ -63,7 +64,10 @@ jobs:
           fi
 
           echo "Validating backup catalog..."
-          docker compose exec -T db pg_restore -l < "$LATEST_BACKUP" | head -n 25
+          docker compose exec -T db pg_restore -l < "$LATEST_BACKUP" > "$RESTORE_LIST"
+
+          echo "Backup catalog preview:"
+          head -n 25 "$RESTORE_LIST"
 
           echo "Updating API repository on Rocky..."
           cd "$API_REPO_DIR"
