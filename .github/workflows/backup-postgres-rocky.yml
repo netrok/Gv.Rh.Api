@@ -1,0 +1,79 @@
+﻿name: Backup PostgreSQL Rocky
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: "Motivo del respaldo"
+        required: false
+        default: "Backup manual antes de cambios"
+
+jobs:
+  backup-postgres:
+    name: Create PostgreSQL backup on Rocky
+    runs-on: [self-hosted, rocky-gv-rh-api]
+    timeout-minutes: 15
+
+    steps:
+      - name: Create PostgreSQL backup
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT_DIR="/opt/gv-rh-demo"
+          BACKUP_DIR="$PROJECT_DIR/backups"
+          DB_SERVICE="db"
+          DB_NAME="gv_rh"
+          DB_USER="postgres"
+
+          TS="$(date +'%Y%m%d_%H%M%S')"
+          BACKUP_FILE="$BACKUP_DIR/gv_rh_manual_${TS}.backup"
+          RESTORE_LIST="/tmp/gv_rh_restore_list_${TS}.txt"
+
+          echo "Starting PostgreSQL backup"
+          echo "Reason: ${{ github.event.inputs.note }}"
+          echo "Project directory: $PROJECT_DIR"
+          echo "Backup directory: $BACKUP_DIR"
+          echo "Database: $DB_NAME"
+          echo "Backup file: $BACKUP_FILE"
+
+          cd "$PROJECT_DIR"
+          mkdir -p "$BACKUP_DIR"
+
+          echo "Current Docker services:"
+          docker compose ps
+
+          echo "Checking PostgreSQL readiness..."
+          docker compose exec -T "$DB_SERVICE" pg_isready -U "$DB_USER" -d "$DB_NAME"
+
+          echo "Creating compressed custom-format backup..."
+          docker compose exec -T "$DB_SERVICE" pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc > "$BACKUP_FILE"
+
+          echo "Validating backup file..."
+          test -s "$BACKUP_FILE"
+
+          chmod 640 "$BACKUP_FILE"
+
+          BACKUP_SIZE="$(du -h "$BACKUP_FILE" | awk '{print $1}')"
+
+          echo "Reading backup catalog with pg_restore..."
+          docker compose exec -T "$DB_SERVICE" pg_restore -l < "$BACKUP_FILE" > "$RESTORE_LIST"
+
+          echo "Backup catalog preview:"
+          head -n 25 "$RESTORE_LIST"
+
+          echo "Latest backups:"
+          ls -lh "$BACKUP_DIR" | tail -n 15
+
+          echo "BACKUP_FILE=$BACKUP_FILE" >> "$GITHUB_ENV"
+          echo "BACKUP_SIZE=$BACKUP_SIZE" >> "$GITHUB_ENV"
+
+      - name: Write summary
+        shell: bash
+        run: |
+          echo "### PostgreSQL backup created successfully" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Server path: \`$BACKUP_FILE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Size: \`$BACKUP_SIZE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Stored on: Rocky Linux" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Uploaded to GitHub artifacts: \`No\`" >> "$GITHUB_STEP_SUMMARY"
