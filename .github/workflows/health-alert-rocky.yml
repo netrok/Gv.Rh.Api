@@ -1,0 +1,275 @@
+﻿name: Health Alert Rocky
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_fail:
+        description: "Forzar falla para probar correo"
+        required: true
+        default: "false"
+  schedule:
+    - cron: "*/15 * * * *"
+
+jobs:
+  health-alert:
+    name: Check Rocky health and alert if failing
+    runs-on:
+      - self-hosted
+    timeout-minutes: 10
+
+    steps:
+      - name: Check health and send alert on failure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          PROJECT_DIR="/opt/gv-rh-demo"
+          ENV_FILE="$PROJECT_DIR/.env"
+          API_CONTAINER="gv-rh-api"
+          WEB_CONTAINER="gv-rh-web"
+          DB_CONTAINER="gv-rh-db"
+          TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+          LOG_FILE="/tmp/gv_rh_health_alert_${TIMESTAMP}.log"
+          FORCE_FAIL="${{ github.event.inputs.force_fail || 'false' }}"
+
+          exec > >(tee "$LOG_FILE") 2>&1
+
+          read_env() {
+            local key="$1"
+            grep -E "^${key}=" "$ENV_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2- || true
+          }
+
+          send_alert() {
+            local line="${1:-unknown}"
+            local code="${2:-1}"
+
+            echo "Intentando enviar alerta por Microsoft Graph..."
+
+            if [ ! -f "$ENV_FILE" ]; then
+              echo "ERROR: no existe $ENV_FILE. No se puede enviar alerta."
+              return 1
+            fi
+
+            local tenant_id client_id client_secret sender recipients
+            tenant_id="$(read_env MicrosoftGraphMail__TenantId)"
+            client_id="$(read_env MicrosoftGraphMail__ClientId)"
+            client_secret="$(read_env MicrosoftGraphMail__ClientSecret)"
+            sender="$(read_env MicrosoftGraphMail__SenderUserId)"
+            recipients="$(read_env Alerts__Recipients)"
+
+            if [ -z "$recipients" ]; then
+              recipients="$sender"
+            fi
+
+            if [ -z "$tenant_id" ] || [ -z "$client_id" ] || [ -z "$client_secret" ] || [ -z "$sender" ] || [ -z "$recipients" ]; then
+              echo "ERROR: faltan variables Graph o destinatarios. No se puede enviar alerta."
+              return 1
+            fi
+
+            local token_response mail_json send_response token_code send_code access_token
+            token_response="$(mktemp)"
+            mail_json="$(mktemp)"
+            send_response="$(mktemp)"
+
+            token_code="$(
+              curl -sS -o "$token_response" -w "%{http_code}" \
+                -X POST "https://login.microsoftonline.com/${tenant_id}/oauth2/v2.0/token" \
+                --data-urlencode "client_id=${client_id}" \
+                --data-urlencode "client_secret=${client_secret}" \
+                --data-urlencode "scope=https://graph.microsoft.com/.default" \
+                --data-urlencode "grant_type=client_credentials"
+            )"
+
+            if [ "$token_code" != "200" ]; then
+              echo "ERROR: no se pudo obtener token para alerta. HTTP $token_code"
+              cat "$token_response" || true
+              rm -f "$token_response" "$mail_json" "$send_response"
+              unset client_secret
+              return 1
+            fi
+
+            access_token="$(
+              python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["access_token"])' "$token_response"
+            )"
+
+            export ALERT_RECIPIENTS="$recipients"
+            export ALERT_LINE="$line"
+            export ALERT_CODE="$code"
+            export ALERT_LOG_FILE="$LOG_FILE"
+
+            python3 - <<'PY' > "$mail_json"
+import json
+import os
+from datetime import datetime, timezone
+
+recipients_raw = os.environ["ALERT_RECIPIENTS"]
+line = os.environ.get("ALERT_LINE", "unknown")
+code = os.environ.get("ALERT_CODE", "1")
+log_file = os.environ.get("ALERT_LOG_FILE")
+
+items = []
+for part in recipients_raw.replace(";", ",").split(","):
+    email = part.strip()
+    if email:
+        items.append({"emailAddress": {"address": email}})
+
+body_lines = [
+    "ALERTA GV RH - Health check falló en Rocky.",
+    "",
+    f"UTC: {datetime.now(timezone.utc).isoformat()}",
+    f"Línea aproximada: {line}",
+    f"Exit code: {code}",
+    "",
+    "Últimas líneas del log:",
+    ""
+]
+
+try:
+    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+        content = f.readlines()[-120:]
+    body_lines.extend(line.rstrip("\n") for line in content)
+except Exception as ex:
+    body_lines.append(f"No se pudo leer log: {ex}")
+
+payload = {
+    "message": {
+        "subject": "ALERTA GV RH - Health check falló en Rocky",
+        "body": {
+            "contentType": "Text",
+            "content": "\n".join(body_lines)
+        },
+        "toRecipients": items
+    },
+    "saveToSentItems": "true"
+}
+
+print(json.dumps(payload))
+PY
+
+            send_code="$(
+              curl -sS -o "$send_response" -w "%{http_code}" \
+                -X POST "https://graph.microsoft.com/v1.0/users/${sender}/sendMail" \
+                -H "Authorization: Bearer ${access_token}" \
+                -H "Content-Type: application/json" \
+                --data @"$mail_json"
+            )"
+
+            unset access_token
+            unset client_secret
+
+            if [ "$send_code" = "202" ]; then
+              echo "ALERT_MAIL_OK: Microsoft Graph aceptó el correo de alerta."
+              rm -f "$token_response" "$mail_json" "$send_response"
+              return 0
+            fi
+
+            echo "ERROR: Graph no aceptó alerta. HTTP $send_code"
+            cat "$send_response" || true
+            rm -f "$token_response" "$mail_json" "$send_response"
+            return 1
+          }
+
+          on_error() {
+            local line="$1"
+            local code="$2"
+            trap - ERR
+            echo "ERROR: Health alert workflow falló. Línea=$line ExitCode=$code"
+            send_alert "$line" "$code" || true
+            exit "$code"
+          }
+
+          trap 'on_error $LINENO $?' ERR
+
+          wait_for_healthy() {
+            local container="$1"
+            local timeout_seconds="${2:-120}"
+            local elapsed=0
+            local status="unknown"
+
+            echo "Esperando health de $container..."
+
+            while [ "$elapsed" -lt "$timeout_seconds" ]; do
+              status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$container")"
+              echo "$container health status: $status"
+
+              if [ "$status" = "healthy" ]; then
+                return 0
+              fi
+
+              if [ "$status" = "unhealthy" ]; then
+                echo "ERROR: $container está unhealthy."
+                docker inspect --format='{{range .State.Health.Log}}{{.End}} {{.ExitCode}} {{.Output}}{{println}}{{end}}' "$container" || true
+                return 1
+              fi
+
+              sleep 5
+              elapsed="$((elapsed + 5))"
+            done
+
+            echo "ERROR: $container no llegó a healthy en ${timeout_seconds}s."
+            docker inspect --format='{{range .State.Health.Log}}{{.End}} {{.ExitCode}} {{.Output}}{{println}}{{end}}' "$container" || true
+            return 1
+          }
+
+          echo "======================================"
+          echo "GV RH Health Alert Check"
+          echo "Evento: ${{ github.event_name }}"
+          echo "Force fail: $FORCE_FAIL"
+          echo "Servidor: $(hostname)"
+          echo "Fecha: $(date)"
+          echo "Proyecto: $PROJECT_DIR"
+          echo "======================================"
+
+          cd "$PROJECT_DIR"
+
+          if [ "$FORCE_FAIL" = "true" ]; then
+            echo "Falla forzada para probar correo de alerta."
+            exit 99
+          fi
+
+          echo "Validando servicios Docker..."
+          docker compose ps
+
+          wait_for_healthy "$API_CONTAINER" 120
+          wait_for_healthy "$WEB_CONTAINER" 120
+          wait_for_healthy "$DB_CONTAINER" 120
+
+          echo "Validando /api/health por Nginx..."
+          HEALTH_JSON="$(curl -fsS http://localhost/api/health)"
+          echo "$HEALTH_JSON"
+
+          echo "$HEALTH_JSON" | grep -q '"status":"ok"'
+          echo "$HEALTH_JSON" | grep -q '"app":"Gv.Rh.Api"'
+          echo "$HEALTH_JSON" | grep -q '"environment":"Production"'
+          echo "$HEALTH_JSON" | grep -q '"database":{"status":"ok"'
+
+          echo "Validando Swagger apagado..."
+          SWAGGER_CODE="$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/swagger/index.html)"
+          echo "Swagger HTTP status: $SWAGGER_CODE"
+
+          if [ "$SWAGGER_CODE" = "200" ]; then
+            echo "ERROR: Swagger está activo en Production."
+            exit 1
+          fi
+
+          echo "Validando variables de seguridad..."
+          grep -q '^ASPNETCORE_ENVIRONMENT=Production$' .env
+          grep -q '^Database__ApplyMigrationsOnStartup=false$' .env
+          grep -q '^Swagger__Enabled=false$' .env
+          grep -q '^Security__UseHttpsRedirection=false$' .env
+
+          echo "HEALTH_OK: GV RH está sano."
+          rm -f "$LOG_FILE"
+
+      - name: Write summary
+        shell: bash
+        run: |
+          echo "### Health check completed successfully" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- API: healthy" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Web: healthy" >> "$GITHUB_STEP_SUMMARY"
+          echo "- DB: healthy" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Health endpoint: OK" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Environment: Production" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Swagger: disabled" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Alert email: only sent on failure" >> "$GITHUB_STEP_SUMMARY"
