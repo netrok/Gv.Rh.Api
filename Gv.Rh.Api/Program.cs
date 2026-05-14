@@ -303,4 +303,19 @@ using (var scope = app.Services.CreateScope())
     Console.WriteLine($"[Auth] Refresh tokens expirados eliminados: {deleted}");
 }
 
+var exitAfterStartupMaintenance =
+    app.Configuration.GetValue<bool>("Database:ExitAfterStartupMaintenance", false);
+
+if (exitAfterStartupMaintenance)
+{
+    var logger = app.Services
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("Startup");
+
+    logger.LogInformation(
+        "Mantenimiento de arranque completado. Database:ExitAfterStartupMaintenance=true. La aplicación finalizará sin iniciar servidor HTTP.");
+
+    return;
+}
+
 app.Run();
