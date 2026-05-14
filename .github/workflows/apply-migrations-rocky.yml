@@ -1,0 +1,99 @@
+﻿name: Apply EF Core Migrations Rocky
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: "Motivo de la migración"
+        required: false
+        default: "Aplicación manual de migraciones EF Core"
+
+jobs:
+  apply-migrations:
+    name: Apply EF Core migrations on Rocky
+    runs-on:
+      - self-hosted
+    timeout-minutes: 25
+
+    steps:
+      - name: Apply migrations using temporary API container
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT_DIR="/opt/gv-rh-demo"
+          API_REPO_DIR="$PROJECT_DIR/api"
+          BACKUP_DIR="$PROJECT_DIR/backups"
+
+          echo "Starting EF Core migration workflow"
+          echo "Reason: ${{ github.event.inputs.note }}"
+          echo "Project directory: $PROJECT_DIR"
+          echo "API repo directory: $API_REPO_DIR"
+
+          cd "$PROJECT_DIR"
+
+          echo "Checking Docker services..."
+          docker compose ps
+
+          echo "Checking PostgreSQL readiness..."
+          docker compose exec -T db pg_isready -U postgres -d gv_rh
+
+          echo "Checking latest manual backup..."
+          LATEST_BACKUP="$(ls -t "$BACKUP_DIR"/gv_rh_manual_*.backup 2>/dev/null | head -n 1 || true)"
+
+          if [ -z "$LATEST_BACKUP" ]; then
+            echo "ERROR: No manual backup found in $BACKUP_DIR"
+            echo "Run 'Backup PostgreSQL Rocky' before applying migrations."
+            exit 1
+          fi
+
+          echo "Latest backup: $LATEST_BACKUP"
+          ls -lh "$LATEST_BACKUP"
+
+          NOW="$(date +%s)"
+          BACKUP_TIME="$(stat -c %Y "$LATEST_BACKUP")"
+          AGE_HOURS="$(( (NOW - BACKUP_TIME) / 3600 ))"
+
+          echo "Backup age: ${AGE_HOURS} hours"
+
+          if [ "$AGE_HOURS" -gt 24 ]; then
+            echo "ERROR: Latest backup is older than 24 hours."
+            echo "Run 'Backup PostgreSQL Rocky' before applying migrations."
+            exit 1
+          fi
+
+          echo "Validating backup catalog..."
+          docker compose exec -T db pg_restore -l < "$LATEST_BACKUP" | head -n 25
+
+          echo "Updating API repository on Rocky..."
+          cd "$API_REPO_DIR"
+          git fetch origin main
+          git reset --hard origin/main
+
+          echo "Building API image with latest code..."
+          cd "$PROJECT_DIR"
+          docker compose build api
+
+          echo "Applying EF Core migrations with temporary API container..."
+          docker compose run --rm --no-deps \
+            -e Database__ApplyMigrationsOnStartup=true \
+            -e Database__ExitAfterStartupMaintenance=true \
+            api
+
+          echo "Migration container finished successfully."
+
+          echo "Current EF migration history:"
+          docker compose exec -T db psql -U postgres -d gv_rh -c 'SELECT "MigrationId", "ProductVersion" FROM "__EFMigrationsHistory" ORDER BY "MigrationId" DESC LIMIT 10;'
+
+          echo "EF Core migrations completed successfully."
+
+      - name: Write summary
+        shell: bash
+        run: |
+          echo "### EF Core migrations completed successfully" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Server: Rocky Linux" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Project path: \`/opt/gv-rh-demo\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Backup required: \`Yes, latest manual backup <= 24 hours\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Migration execution: \`Temporary API container\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Running API container replaced: \`No\`" >> "$GITHUB_STEP_SUMMARY"
