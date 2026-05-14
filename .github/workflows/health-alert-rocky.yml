@@ -7,6 +7,10 @@ on:
         description: "Forzar falla para probar correo"
         required: true
         default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
   schedule:
     - cron: "*/15 * * * *"
 
@@ -20,6 +24,8 @@ jobs:
     steps:
       - name: Check health and send alert on failure
         shell: bash
+        env:
+          FORCE_FAIL_INPUT: ${{ github.event.inputs.force_fail || 'false' }}
         run: |
           set -Eeuo pipefail
 
@@ -30,7 +36,7 @@ jobs:
           DB_CONTAINER="gv-rh-db"
           TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
           LOG_FILE="/tmp/gv_rh_health_alert_${TIMESTAMP}.log"
-          FORCE_FAIL="${{ github.event.inputs.force_fail || 'false' }}"
+          FORCE_FAIL="${FORCE_FAIL_INPUT:-false}"
 
           exec > >(tee "$LOG_FILE") 2>&1
 
@@ -127,7 +133,7 @@ body_lines = [
 try:
     with open(log_file, "r", encoding="utf-8", errors="replace") as f:
         content = f.readlines()[-120:]
-    body_lines.extend(line.rstrip("\n") for line in content)
+    body_lines.extend(x.rstrip("\n") for x in content)
 except Exception as ex:
     body_lines.append(f"No se pudo leer log: {ex}")
 
@@ -173,8 +179,10 @@ PY
             local line="$1"
             local code="$2"
             trap - ERR
+
             echo "ERROR: Health alert workflow falló. Línea=$line ExitCode=$code"
             send_alert "$line" "$code" || true
+
             exit "$code"
           }
 
@@ -224,7 +232,7 @@ PY
 
           if [ "$FORCE_FAIL" = "true" ]; then
             echo "Falla forzada para probar correo de alerta."
-            exit 99
+            false
           fi
 
           echo "Validando servicios Docker..."
@@ -249,7 +257,7 @@ PY
 
           if [ "$SWAGGER_CODE" = "200" ]; then
             echo "ERROR: Swagger está activo en Production."
-            exit 1
+            false
           fi
 
           echo "Validando variables de seguridad..."
