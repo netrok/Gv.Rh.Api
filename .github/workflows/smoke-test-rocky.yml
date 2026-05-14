@@ -1,0 +1,128 @@
+﻿name: Smoke Test Rocky
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: "Motivo de la prueba"
+        required: false
+        default: "Smoke test manual de Rocky"
+
+jobs:
+  smoke-test:
+    name: Smoke test Rocky deployment
+    runs-on:
+      - self-hosted
+    timeout-minutes: 10
+
+    steps:
+      - name: Run smoke tests on Rocky
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT_DIR="/opt/gv-rh-demo"
+          API_CONTAINER="gv-rh-api"
+          WEB_CONTAINER="gv-rh-web"
+          DB_CONTAINER="gv-rh-db"
+
+          echo "Starting smoke test"
+          echo "Reason: ${{ github.event.inputs.note }}"
+          echo "Project directory: $PROJECT_DIR"
+
+          cd "$PROJECT_DIR"
+
+          echo "Checking Docker Compose services..."
+          docker compose ps
+
+          wait_for_healthy() {
+            local container="$1"
+            local timeout_seconds="${2:-120}"
+            local elapsed=0
+            local status="unknown"
+
+            echo "Waiting for $container to become healthy..."
+
+            while [ "$elapsed" -lt "$timeout_seconds" ]; do
+              status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$container")"
+
+              echo "$container health status: $status"
+
+              if [ "$status" = "healthy" ]; then
+                return 0
+              fi
+
+              if [ "$status" = "unhealthy" ]; then
+                echo "ERROR: $container is unhealthy."
+                docker inspect --format='{{range .State.Health.Log}}{{.End}} {{.ExitCode}} {{.Output}}{{println}}{{end}}' "$container" || true
+                return 1
+              fi
+
+              sleep 5
+              elapsed="$((elapsed + 5))"
+            done
+
+            echo "ERROR: $container did not become healthy within ${timeout_seconds}s."
+            docker inspect --format='{{range .State.Health.Log}}{{.End}} {{.ExitCode}} {{.Output}}{{println}}{{end}}' "$container" || true
+            return 1
+          }
+
+          wait_for_healthy "$API_CONTAINER" 120
+          wait_for_healthy "$WEB_CONTAINER" 120
+          wait_for_healthy "$DB_CONTAINER" 120
+
+          echo "Validating API health through Nginx..."
+          HEALTH_JSON="$(curl -fsS http://localhost/api/health)"
+          echo "$HEALTH_JSON"
+
+          echo "$HEALTH_JSON" | grep -q '"status":"ok"'
+          echo "$HEALTH_JSON" | grep -q '"app":"Gv.Rh.Api"'
+          echo "$HEALTH_JSON" | grep -q '"environment":"Production"'
+          echo "$HEALTH_JSON" | grep -q '"database":{"status":"ok"'
+
+          echo "Validating API health directly through Kestrel..."
+          DIRECT_HEALTH_JSON="$(curl -fsS http://localhost:8080/health)"
+          echo "$DIRECT_HEALTH_JSON"
+
+          echo "$DIRECT_HEALTH_JSON" | grep -q '"status":"ok"'
+          echo "$DIRECT_HEALTH_JSON" | grep -q '"environment":"Production"'
+
+          echo "Validating API root endpoint..."
+          ROOT_JSON="$(curl -fsS http://localhost:8080/)"
+          echo "$ROOT_JSON"
+
+          echo "$ROOT_JSON" | grep -q '"status":"ok"'
+          echo "$ROOT_JSON" | grep -q '"environment":"Production"'
+
+          echo "Validating Swagger is disabled..."
+          SWAGGER_CODE="$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/swagger/index.html)"
+          echo "Swagger HTTP status: $SWAGGER_CODE"
+
+          if [ "$SWAGGER_CODE" = "200" ]; then
+            echo "ERROR: Swagger is enabled in Production."
+            exit 1
+          fi
+
+          echo "Validating production safety variables..."
+          grep -q '^ASPNETCORE_ENVIRONMENT=Production$' .env
+          grep -q '^Database__ApplyMigrationsOnStartup=false$' .env
+          grep -q '^Swagger__Enabled=false$' .env
+          grep -q '^Security__UseHttpsRedirection=false$' .env
+
+          echo "Checking recent API logs..."
+          docker compose logs --tail=120 api
+
+          echo "Smoke test completed successfully."
+
+      - name: Write summary
+        shell: bash
+        run: |
+          echo "### Smoke test completed successfully" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- API: healthy" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Web: healthy" >> "$GITHUB_STEP_SUMMARY"
+          echo "- DB: healthy" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Environment: Production" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Health endpoint: OK" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Swagger: disabled" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Migrations on startup: disabled" >> "$GITHUB_STEP_SUMMARY"
