@@ -17,8 +17,30 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.DataProtection;
+using System.IO;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"];
+var dataProtectionApplicationName =
+    builder.Configuration["DataProtection:ApplicationName"] ?? "Gv.Rh.Api";
+
+if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
+{
+    Directory.CreateDirectory(dataProtectionKeysPath);
+
+    builder.Services
+        .AddDataProtection()
+        .SetApplicationName(dataProtectionApplicationName)
+        .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath));
+}
+else
+{
+    builder.Services
+        .AddDataProtection()
+        .SetApplicationName(dataProtectionApplicationName);
+}
 
 // QuestPDF license
 QuestPDF.Settings.License = LicenseType.Community;
