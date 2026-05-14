@@ -245,16 +245,37 @@ builder.Services.AddDbContext<RhDbContext>((sp, opt) =>
 
 var app = builder.Build();
 
-// Redirect raíz a Swagger
-app.MapGet("/", () => Results.Redirect("/swagger"));
+var swaggerEnabled =
+    app.Configuration.GetValue<bool?>("Swagger:Enabled") ?? app.Environment.IsDevelopment();
 
-// Swagger
-if (app.Environment.IsDevelopment())
+var useHttpsRedirection =
+    app.Configuration.GetValue<bool>("Security:UseHttpsRedirection", false);
+
+// Redirect raíz según Swagger esté activo o no
+app.MapGet("/", () =>
+{
+    if (swaggerEnabled)
+    {
+        return Results.Redirect("/swagger");
+    }
+
+    return Results.Ok(new
+    {
+        status = "ok",
+        app = "Gv.Rh.Api",
+        environment = app.Environment.EnvironmentName
+    });
+});
+
+// Swagger controlado por configuración
+if (swaggerEnabled)
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
-else
+
+// HTTPS redirection controlado por configuración
+if (useHttpsRedirection)
 {
     app.UseHttpsRedirection();
 }
