@@ -9,16 +9,16 @@ using Gv.Rh.Infrastructure.Reports;
 using Gv.Rh.Infrastructure.Services;
 using Gv.Rh.Infrastructure.Services.Reclutamiento;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using QuestPDF.Infrastructure;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Serialization;
-using Microsoft.AspNetCore.DataProtection;
-using System.IO;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -185,8 +185,6 @@ builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddScoped<TokenService>();
 
 builder.Services.AddScoped<IIncidenciaAuthorizationService, IncidenciaAuthorizationService>();
-
-
 builder.Services.AddScoped<IEmpleadoAccessScopeService, EmpleadoAccessScopeService>();
 
 // Reportes corporativos
@@ -280,9 +278,19 @@ using (var scope = app.Services.CreateScope())
 
     var db = scope.ServiceProvider.GetRequiredService<RhDbContext>();
 
-    logger.LogInformation("Aplicando migraciones pendientes de EF Core...");
-    await db.Database.MigrateAsync();
-    logger.LogInformation("Migraciones EF Core aplicadas correctamente.");
+    var applyMigrationsOnStartup =
+        app.Configuration.GetValue<bool>("Database:ApplyMigrationsOnStartup", true);
+
+    if (applyMigrationsOnStartup)
+    {
+        logger.LogInformation("Aplicando migraciones pendientes de EF Core...");
+        await db.Database.MigrateAsync();
+        logger.LogInformation("Migraciones EF Core aplicadas correctamente.");
+    }
+    else
+    {
+        logger.LogInformation("Migraciones EF Core omitidas al iniciar. Database:ApplyMigrationsOnStartup=false.");
+    }
 
     logger.LogInformation("Ejecutando seeding inicial...");
     await DbSeeder.SeedAsync(db);
@@ -296,4 +304,3 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
-
