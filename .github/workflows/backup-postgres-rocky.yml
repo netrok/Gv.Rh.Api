@@ -11,7 +11,7 @@ on:
 jobs:
   backup-postgres:
     name: Create PostgreSQL backup on Rocky
-    runs-on: [self-hosted, rocky-gv-rh-api]
+    runs-on: [self-hosted]
     timeout-minutes: 15
 
     steps:
