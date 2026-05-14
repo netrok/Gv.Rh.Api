@@ -1,0 +1,50 @@
+﻿name: Deploy API to Rocky
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-api:
+    name: Deploy API
+    runs-on:
+      - self-hosted
+      - gv-rh-rocky
+      - api
+
+    steps:
+      - name: Deploy API on Rocky
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "======================================"
+          echo "Deploy API iniciado"
+          echo "Servidor: $(hostname)"
+          echo "Usuario: $(whoami)"
+          echo "Fecha: $(date)"
+          echo "======================================"
+
+          echo "Verificando Docker..."
+          docker ps
+          docker compose version
+
+          echo "Actualizando repo API..."
+          cd /opt/gv-rh-demo/api
+          git fetch origin
+          git reset --hard origin/main
+          git status -sb
+
+          echo "Reconstruyendo contenedor API..."
+          cd /opt/gv-rh-demo
+          docker compose build --no-cache api
+          docker compose up -d --no-deps --force-recreate api
+
+          echo "Estado de contenedores..."
+          docker compose ps
+
+          echo "Logs recientes del API..."
+          docker compose logs --tail=160 api
+
+          echo "======================================"
+          echo "Deploy API terminado correctamente"
+          echo "======================================"
