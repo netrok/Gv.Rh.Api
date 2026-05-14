@@ -4,76 +4,151 @@ on:
   workflow_dispatch:
     inputs:
       note:
-        description: "Motivo del respaldo"
+        description: "Motivo del backup"
         required: false
-        default: "Backup manual antes de cambios"
+        default: "Backup manual PostgreSQL"
+  schedule:
+    - cron: "17 23 * * *"
+      timezone: "America/Mexico_City"
 
 jobs:
   backup-postgres:
     name: Create PostgreSQL backup on Rocky
-    runs-on: [self-hosted]
-    timeout-minutes: 15
+    runs-on:
+      - self-hosted
+    timeout-minutes: 20
 
     steps:
-      - name: Create PostgreSQL backup
+      - name: Create and validate PostgreSQL backup
         shell: bash
         run: |
           set -euo pipefail
 
           PROJECT_DIR="/opt/gv-rh-demo"
           BACKUP_DIR="$PROJECT_DIR/backups"
-          DB_SERVICE="db"
-          DB_NAME="gv_rh"
-          DB_USER="postgres"
+          KEEP_AUTO="30"
+          EVENT_NAME="${{ github.event_name }}"
 
-          TS="$(date +'%Y%m%d_%H%M%S')"
-          BACKUP_FILE="$BACKUP_DIR/gv_rh_manual_${TS}.backup"
-          RESTORE_LIST="/tmp/gv_rh_restore_list_${TS}.txt"
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            BACKUP_KIND="auto"
+            RUN_REASON="Backup automático diario"
+          else
+            BACKUP_KIND="manual"
+            RUN_REASON="${{ github.event.inputs.note }}"
+          fi
 
-          echo "Starting PostgreSQL backup"
-          echo "Reason: ${{ github.event.inputs.note }}"
-          echo "Project directory: $PROJECT_DIR"
-          echo "Backup directory: $BACKUP_DIR"
-          echo "Database: $DB_NAME"
-          echo "Backup file: $BACKUP_FILE"
+          TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+          BACKUP_NAME="gv_rh_${BACKUP_KIND}_${TIMESTAMP}.backup"
+          BACKUP_PATH="$BACKUP_DIR/$BACKUP_NAME"
+          RESTORE_LIST="/tmp/gv_rh_restore_list_backup_${TIMESTAMP}.txt"
+
+          echo "======================================"
+          echo "PostgreSQL backup iniciado"
+          echo "Evento: $EVENT_NAME"
+          echo "Motivo: $RUN_REASON"
+          echo "Tipo: $BACKUP_KIND"
+          echo "Servidor: $(hostname)"
+          echo "Usuario: $(whoami)"
+          echo "Fecha: $(date)"
+          echo "Directorio proyecto: $PROJECT_DIR"
+          echo "Directorio backups: $BACKUP_DIR"
+          echo "Archivo destino: $BACKUP_PATH"
+          echo "======================================"
 
           cd "$PROJECT_DIR"
           mkdir -p "$BACKUP_DIR"
 
-          echo "Current Docker services:"
+          echo "Verificando servicios Docker..."
           docker compose ps
 
-          echo "Checking PostgreSQL readiness..."
-          docker compose exec -T "$DB_SERVICE" pg_isready -U "$DB_USER" -d "$DB_NAME"
+          echo "Verificando PostgreSQL..."
+          docker compose exec -T db pg_isready -U postgres -d gv_rh
 
-          echo "Creating compressed custom-format backup..."
-          docker compose exec -T "$DB_SERVICE" pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc > "$BACKUP_FILE"
+          echo "Espacio en disco antes del backup..."
+          df -h "$PROJECT_DIR"
+          du -sh "$BACKUP_DIR" || true
 
-          echo "Validating backup file..."
-          test -s "$BACKUP_FILE"
+          echo "Creando backup PostgreSQL formato CUSTOM gzip..."
+          docker compose exec -T db pg_dump \
+            -U postgres \
+            -d gv_rh \
+            -F c \
+            -Z 9 \
+            --no-owner \
+            --no-privileges \
+            > "$BACKUP_PATH"
 
-          chmod 640 "$BACKUP_FILE"
+          chmod 640 "$BACKUP_PATH"
 
-          BACKUP_SIZE="$(du -h "$BACKUP_FILE" | awk '{print $1}')"
+          echo "Backup creado:"
+          ls -lh "$BACKUP_PATH"
 
-          echo "Reading backup catalog with pg_restore..."
-          docker compose exec -T "$DB_SERVICE" pg_restore -l < "$BACKUP_FILE" > "$RESTORE_LIST"
+          if [ ! -s "$BACKUP_PATH" ]; then
+            echo "ERROR: el backup quedó vacío."
+            exit 1
+          fi
 
-          echo "Backup catalog preview:"
+          echo "Validando catálogo del backup..."
+          docker compose exec -T db pg_restore -l < "$BACKUP_PATH" > "$RESTORE_LIST"
+
+          echo "Vista previa del catálogo:"
           head -n 25 "$RESTORE_LIST"
 
-          echo "Latest backups:"
-          ls -lh "$BACKUP_DIR" | tail -n 15
+          echo "Verificando que el catálogo contenga tablas esperadas..."
+          grep -q '__EFMigrationsHistory' "$RESTORE_LIST"
+          grep -q 'TABLE public' "$RESTORE_LIST"
 
-          echo "BACKUP_FILE=$BACKUP_FILE" >> "$GITHUB_ENV"
-          echo "BACKUP_SIZE=$BACKUP_SIZE" >> "$GITHUB_ENV"
+          echo "Espacio en disco después del backup..."
+          df -h "$PROJECT_DIR"
+          du -sh "$BACKUP_DIR" || true
+
+          if [ "$BACKUP_KIND" = "auto" ]; then
+            echo "Aplicando retención de backups automáticos. Conservando últimos $KEEP_AUTO..."
+            mapfile -t AUTO_BACKUPS < <(ls -1t "$BACKUP_DIR"/gv_rh_auto_*.backup 2>/dev/null || true)
+
+            TOTAL_AUTO="${#AUTO_BACKUPS[@]}"
+            echo "Backups automáticos actuales: $TOTAL_AUTO"
+
+            if [ "$TOTAL_AUTO" -gt "$KEEP_AUTO" ]; then
+              DELETE_LIST=("${AUTO_BACKUPS[@]:$KEEP_AUTO}")
+
+              echo "Backups automáticos a eliminar:"
+              printf '%s\n' "${DELETE_LIST[@]}"
+
+              for file in "${DELETE_LIST[@]}"; do
+                if [[ "$file" == "$BACKUP_DIR"/gv_rh_auto_*.backup ]]; then
+                  rm -f -- "$file"
+                  echo "Eliminado: $file"
+                else
+                  echo "Saltado por seguridad: $file"
+                fi
+              done
+            else
+              echo "No hay backups automáticos para eliminar."
+            fi
+          else
+            echo "Backup manual: no se aplica retención automática aquí."
+          fi
+
+          echo "Listado reciente de backups:"
+          ls -lh "$BACKUP_DIR"/*.backup 2>/dev/null | tail -n 20 || true
+
+          rm -f "$RESTORE_LIST"
+
+          echo "======================================"
+          echo "PostgreSQL backup completado correctamente"
+          echo "Archivo: $BACKUP_PATH"
+          echo "======================================"
 
       - name: Write summary
         shell: bash
         run: |
-          echo "### PostgreSQL backup created successfully" >> "$GITHUB_STEP_SUMMARY"
+          echo "### PostgreSQL backup completed successfully" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Server path: \`$BACKUP_FILE\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Size: \`$BACKUP_SIZE\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Stored on: Rocky Linux" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Uploaded to GitHub artifacts: \`No\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Server: Rocky Linux" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Project path: \`/opt/gv-rh-demo\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Backup path: \`/opt/gv-rh-demo/backups\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Trigger: \`${{ github.event_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Schedule: \`23:17 America/Mexico_City\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Automatic retention: \`Keep latest 30 gv_rh_auto_*.backup\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Upload to GitHub artifacts: \`No\`" >> "$GITHUB_STEP_SUMMARY"
