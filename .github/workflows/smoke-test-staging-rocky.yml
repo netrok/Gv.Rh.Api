@@ -1,0 +1,142 @@
+name: Smoke Test Staging Rocky
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke-test-staging:
+    name: Smoke Test Rocky Staging
+    runs-on:
+      - self-hosted
+    timeout-minutes: 10
+
+    steps:
+      - name: Run staging smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STAGING_DIR="/opt/gv-rh-staging"
+          PROD_DIR="/opt/gv-rh-demo"
+
+          echo "======================================"
+          echo "GV RH - Smoke Test Staging"
+          echo "Server: $(hostname)"
+          echo "Date: $(date)"
+          echo "Staging dir: $STAGING_DIR"
+          echo "======================================"
+
+          cd "$STAGING_DIR"
+
+          echo "Validando archivos base staging..."
+          test -f "$STAGING_DIR/.env"
+          test -f "$STAGING_DIR/docker-compose.yml"
+          test -d "$STAGING_DIR/api"
+          test -d "$STAGING_DIR/web"
+
+          echo "Validando compose staging..."
+          docker compose config > /tmp/gv-rh-staging-compose-check.yml
+
+          echo "Estado Docker staging..."
+          docker compose ps
+
+          echo "Validando contenedores healthy..."
+          API_HEALTH_STATUS="$(docker inspect --format='{{json .State.Health.Status}}' gv-rh-stg-api)"
+          WEB_HEALTH_STATUS="$(docker inspect --format='{{json .State.Health.Status}}' gv-rh-stg-web)"
+          DB_HEALTH_STATUS="$(docker inspect --format='{{json .State.Health.Status}}' gv-rh-stg-db)"
+
+          echo "API health: $API_HEALTH_STATUS"
+          echo "WEB health: $WEB_HEALTH_STATUS"
+          echo "DB health: $DB_HEALTH_STATUS"
+
+          test "$API_HEALTH_STATUS" = '"healthy"'
+          test "$WEB_HEALTH_STATUS" = '"healthy"'
+          test "$DB_HEALTH_STATUS" = '"healthy"'
+
+          echo "Validando puertos staging..."
+          docker compose ps | grep -q '127.0.0.1:18080->8080/tcp'
+          docker compose ps | grep -q '0.0.0.0:8081->80/tcp'
+
+          echo "Validando API directa staging..."
+          API_JSON="$(curl -fsS http://localhost:18080/health)"
+          echo "$API_JSON"
+
+          echo "$API_JSON" | grep -q '"status":"ok"'
+          echo "$API_JSON" | grep -q '"app":"Gv.Rh.Api"'
+          echo "$API_JSON" | grep -q '"environment":"Staging"'
+          echo "$API_JSON" | grep -q '"database":{"status":"ok"'
+
+          echo "Validando Web staging..."
+          WEB_CODE="$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8081/)"
+          echo "Web HTTP status: $WEB_CODE"
+
+          if [ "$WEB_CODE" != "200" ]; then
+            echo "ERROR: Web staging no responde 200."
+            exit 1
+          fi
+
+          echo "Validando API staging por Nginx/Web..."
+          PROXY_JSON="$(curl -fsS http://localhost:8081/api/health)"
+          echo "$PROXY_JSON"
+
+          echo "$PROXY_JSON" | grep -q '"status":"ok"'
+          echo "$PROXY_JSON" | grep -q '"environment":"Staging"'
+          echo "$PROXY_JSON" | grep -q '"database":{"status":"ok"'
+
+          echo "Validando Swagger activo en Staging..."
+          SWAGGER_CODE="$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18080/swagger/index.html)"
+          echo "Swagger HTTP status: $SWAGGER_CODE"
+
+          if [ "$SWAGGER_CODE" != "200" ]; then
+            echo "ERROR: Swagger debe estar activo en Staging."
+            exit 1
+          fi
+
+          echo "Validando notificaciones apagadas en Staging..."
+          grep -q '^Notifications__Enabled=false$' "$STAGING_DIR/.env"
+          grep -q '^Notifications__OutboxEnabled=false$' "$STAGING_DIR/.env"
+          grep -q '^Notifications__AprobacionesSchedulerEnabled=false$' "$STAGING_DIR/.env"
+
+          echo "Validando DB staging con conteos básicos..."
+          docker compose exec -T db psql -U postgres -d gv_rh_staging -c '
+          SELECT
+            (SELECT COUNT(*) FROM users) AS users,
+            (SELECT COUNT(*) FROM departamentos) AS departamentos,
+            (SELECT COUNT(*) FROM empleados) AS empleados,
+            (SELECT COUNT(*) FROM "__EFMigrationsHistory") AS migrations;
+          '
+
+          echo "Validando repo web staging limpio..."
+          cd "$STAGING_DIR/web"
+          git status --short
+
+          test -f Dockerfile
+          test -f nginx/default.conf
+
+          echo "Validando producción sigue sana..."
+          cd "$PROD_DIR"
+
+          docker compose ps
+
+          PROD_JSON="$(curl -fsS http://localhost/api/health)"
+          echo "$PROD_JSON"
+
+          echo "$PROD_JSON" | grep -q '"status":"ok"'
+          echo "$PROD_JSON" | grep -q '"environment":"Production"'
+          echo "$PROD_JSON" | grep -q '"database":{"status":"ok"'
+
+          echo "SMOKE_TEST_STAGING_OK"
+
+      - name: Write summary
+        shell: bash
+        run: |
+          echo "### Smoke Test Staging completed successfully" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Environment: Staging" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Staging path: \`/opt/gv-rh-staging\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- API direct: \`http://localhost:18080/health\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Web: \`http://localhost:8081/\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- API proxy: \`http://localhost:8081/api/health\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Swagger: active in staging" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Notifications: disabled in staging" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Production checked: yes" >> "$GITHUB_STEP_SUMMARY"
