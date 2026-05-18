@@ -1015,35 +1015,75 @@ El health debe responder:
 
 ---
 
-### Archivos copiados manualmente para Web Staging
+### Archivos oficiales para Web Staging
 
-El repo web clonado no incluía inicialmente los archivos requeridos por Docker para Rocky.
+El repo `gv-rh-web` ya incluye los archivos necesarios para construir y servir la Web con Docker/Nginx en Rocky.
 
-Se copiaron desde producción:
-
-```bash
-cp /opt/gv-rh-demo/web/Dockerfile /opt/gv-rh-staging/web/Dockerfile
-cp -r /opt/gv-rh-demo/web/nginx /opt/gv-rh-staging/web/
-```
-
-Archivos esperados:
+Archivos oficiales esperados:
 
 ```bash
 /opt/gv-rh-staging/web/Dockerfile
 /opt/gv-rh-staging/web/nginx/default.conf
 ```
 
-Validar:
+Validar en Rocky:
 
 ```bash
-ls -lah /opt/gv-rh-staging/web/Dockerfile
-ls -lah /opt/gv-rh-staging/web/nginx/default.conf
+cd /opt/gv-rh-staging/web
+
+git status
+ls -lah Dockerfile
+ls -lah nginx/default.conf
 ```
 
-Pendiente recomendado:
+Estado esperado:
 
 ```txt
-Agregar Dockerfile y nginx/default.conf al repo gv-rh-web para no depender de copias manuales.
+En la rama main
+Tu rama está actualizada con 'origin/main'.
+nada para hacer commit, el árbol de trabajo está limpio
+Dockerfile existe
+nginx/default.conf existe
+```
+
+Estos archivos ya no deben copiarse manualmente desde producción.
+
+El procedimiento manual anterior queda obsoleto:
+
+```bash
+cp /opt/gv-rh-demo/web/Dockerfile /opt/gv-rh-staging/web/Dockerfile
+cp -r /opt/gv-rh-demo/web/nginx /opt/gv-rh-staging/web/
+```
+
+El flujo correcto ahora es actualizar el repo web desde Git:
+
+```bash
+cd /opt/gv-rh-staging/web
+git fetch origin main
+git reset --hard origin/main
+```
+
+Luego desde `/opt/gv-rh-staging`:
+
+```bash
+docker compose build web
+docker compose up -d --no-deps --force-recreate web
+```
+
+Validar Web staging:
+
+```bash
+curl -i http://localhost:8081/
+curl -i http://localhost:8081/api/health
+```
+
+Resultado esperado:
+
+```txt
+8081/             HTTP 200 OK
+8081/api/health   HTTP 200 OK
+environment       Staging
+database.status   ok
 ```
 
 ---
