@@ -580,6 +580,15 @@ Debe terminar en verde.
 
 Workflow manual:
 
+---
+
+## Smoke Test Staging Rocky
+
+Workflow manual:
+
+```txt
+Gv.Rh.Api → Actions → Smoke Test Staging Rocky → Run workflow
+
 ```txt
 gv-rh-web → Actions → Smoke Test Web Rocky → Run workflow
 ```
