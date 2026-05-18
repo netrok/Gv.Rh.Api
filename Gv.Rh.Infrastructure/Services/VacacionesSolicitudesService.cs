@@ -141,6 +141,13 @@ public sealed class VacacionesSolicitudesService : IVacacionesSolicitudesService
         if (!CanCreateForEmployee(actor, empleado))
             throw new UnauthorizedAccessException("No tienes permiso para crear esta solicitud.");
 
+        await ValidateNoSolicitudTraslapadaAsync(
+            empleado.Id,
+            request.FechaInicio,
+            request.FechaFin,
+            solicitudIdExcluir: null,
+            cancellationToken);
+
         var periodo = await ResolvePeriodoAsync(
             empleado.Id,
             request.VacacionPeriodoId,
@@ -305,7 +312,7 @@ public sealed class VacacionesSolicitudesService : IVacacionesSolicitudesService
 
         await _db.SaveChangesAsync(cancellationToken);
 
-                await _notificationService.NotificarSolicitudResueltaAsync(
+        await _notificationService.NotificarSolicitudResueltaAsync(
             id,
             EstatusVacacionSolicitud.RECHAZADA.ToString(),
             cancellationToken);
@@ -344,7 +351,7 @@ public sealed class VacacionesSolicitudesService : IVacacionesSolicitudesService
 
         await _db.SaveChangesAsync(cancellationToken);
 
-                await _notificationService.NotificarSolicitudResueltaAsync(
+        await _notificationService.NotificarSolicitudResueltaAsync(
             id,
             EstatusVacacionSolicitud.CANCELADA.ToString(),
             cancellationToken);
@@ -398,6 +405,32 @@ public sealed class VacacionesSolicitudesService : IVacacionesSolicitudesService
             .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
         return solicitud ?? throw new KeyNotFoundException("La solicitud de vacaciones no existe.");
+    }
+
+    private async Task ValidateNoSolicitudTraslapadaAsync(
+        int empleadoId,
+        DateOnly fechaInicio,
+        DateOnly fechaFin,
+        int? solicitudIdExcluir,
+        CancellationToken cancellationToken)
+    {
+        var existeTraslape = await _db.VacacionSolicitudes
+            .AsNoTracking()
+            .AnyAsync(
+                x =>
+                    x.EmpleadoId == empleadoId &&
+                    (!solicitudIdExcluir.HasValue || x.Id != solicitudIdExcluir.Value) &&
+                    (x.Estatus == EstatusVacacionSolicitud.PENDIENTE ||
+                     x.Estatus == EstatusVacacionSolicitud.APROBADA) &&
+                    x.FechaInicio <= fechaFin &&
+                    x.FechaFin >= fechaInicio,
+                cancellationToken);
+
+        if (existeTraslape)
+        {
+            throw new InvalidOperationException(
+                "Ya existe una solicitud pendiente o aprobada que se traslapa con ese rango de fechas.");
+        }
     }
 
     private async Task<VacacionPeriodo> ResolvePeriodoAsync(
