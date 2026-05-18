@@ -1,0 +1,121 @@
+name: Deploy API Staging Rocky
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch a desplegar en Staging"
+        required: true
+        default: "main"
+
+jobs:
+  deploy-api-staging:
+    name: Deploy API to Rocky Staging
+    runs-on:
+      - self-hosted
+    timeout-minutes: 25
+
+    steps:
+      - name: Deploy API to staging
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT_DIR="/opt/gv-rh-staging"
+          API_REPO_DIR="$PROJECT_DIR/api"
+          BRANCH="${{ github.event.inputs.branch }}"
+
+          echo "======================================"
+          echo "Deploy API Staging"
+          echo "Branch: $BRANCH"
+          echo "Project: $PROJECT_DIR"
+          echo "API repo: $API_REPO_DIR"
+          echo "Server: $(hostname)"
+          echo "Date: $(date)"
+          echo "======================================"
+
+          cd "$PROJECT_DIR"
+
+          echo "Validando archivos staging..."
+          test -f "$PROJECT_DIR/.env"
+          test -f "$PROJECT_DIR/docker-compose.yml"
+          test -d "$API_REPO_DIR"
+
+          echo "Validando compose..."
+          docker compose config > /tmp/gv-rh-staging-compose-check.yml
+
+          echo "Estado antes del deploy..."
+          docker compose ps
+
+          echo "Validando DB staging..."
+          docker compose exec -T db pg_isready -U postgres -d gv_rh_staging
+
+          echo "Actualizando repo API staging..."
+          cd "$API_REPO_DIR"
+          git fetch origin "$BRANCH"
+          git reset --hard "origin/$BRANCH"
+
+          echo "Construyendo imagen API staging..."
+          cd "$PROJECT_DIR"
+          docker compose build api
+
+          echo "Recreando contenedor API staging..."
+          docker compose up -d --no-deps --force-recreate api
+
+          echo "Esperando API staging..."
+          sleep 45
+
+          echo "Estado después del deploy..."
+          docker compose ps
+
+          echo "Validando health API directa staging..."
+          HEALTH_JSON="$(curl -fsS http://localhost:18080/health)"
+          echo "$HEALTH_JSON"
+
+          echo "$HEALTH_JSON" | grep -q '"status":"ok"'
+          echo "$HEALTH_JSON" | grep -q '"app":"Gv.Rh.Api"'
+          echo "$HEALTH_JSON" | grep -q '"environment":"Staging"'
+          echo "$HEALTH_JSON" | grep -q '"database":{"status":"ok"'
+
+          echo "Validando health API staging por Web/Nginx..."
+          HEALTH_WEB_JSON="$(curl -fsS http://localhost:8081/api/health)"
+          echo "$HEALTH_WEB_JSON"
+
+          echo "$HEALTH_WEB_JSON" | grep -q '"status":"ok"'
+          echo "$HEALTH_WEB_JSON" | grep -q '"environment":"Staging"'
+          echo "$HEALTH_WEB_JSON" | grep -q '"database":{"status":"ok"'
+
+          echo "Validando Swagger activo en Staging..."
+          SWAGGER_CODE="$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18080/swagger/index.html)"
+          echo "Swagger HTTP status: $SWAGGER_CODE"
+
+          if [ "$SWAGGER_CODE" != "200" ]; then
+            echo "ERROR: Swagger debe estar activo en Staging."
+            exit 1
+          fi
+
+          echo "Validando notificaciones apagadas en Staging..."
+          grep -q '^Notifications__Enabled=false$' "$PROJECT_DIR/.env"
+          grep -q '^Notifications__OutboxEnabled=false$' "$PROJECT_DIR/.env"
+          grep -q '^Notifications__AprobacionesSchedulerEnabled=false$' "$PROJECT_DIR/.env"
+
+          echo "Validando producción sigue sana..."
+          cd /opt/gv-rh-demo
+          PROD_HEALTH="$(curl -fsS http://localhost/api/health)"
+          echo "$PROD_HEALTH"
+
+          echo "$PROD_HEALTH" | grep -q '"environment":"Production"'
+          echo "$PROD_HEALTH" | grep -q '"database":{"status":"ok"'
+
+          echo "DEPLOY_API_STAGING_OK"
+
+      - name: Write summary
+        shell: bash
+        run: |
+          echo "### API Staging deploy completed successfully" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Environment: Staging" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Project path: \`/opt/gv-rh-staging\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- API URL local: \`http://localhost:18080/health\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Web proxy health: \`http://localhost:8081/api/health\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Production checked: Yes" >> "$GITHUB_STEP_SUMMARY"
