@@ -23,6 +23,17 @@ public sealed class VacacionesDashboardService : IVacacionesDashboardService
         var fechaLimite30 = fechaCorte.AddDays(30);
         var inicioMes = new DateOnly(fechaCorte.Year, fechaCorte.Month, 1);
 
+        var inicioMesUtc = new DateTime(
+            fechaCorte.Year,
+            fechaCorte.Month,
+            1,
+            0,
+            0,
+            0,
+            DateTimeKind.Utc);
+
+        var inicioMesSiguienteUtc = inicioMesUtc.AddMonths(1);
+
         var empleadosActivos = await _db.Empleados
             .AsNoTracking()
             .CountAsync(
@@ -87,6 +98,64 @@ public sealed class VacacionesDashboardService : IVacacionesDashboardService
                 x => x.Origen == "EXCEL_LEGACY" ||
                      x.ImportacionArchivo != null,
                 cancellationToken);
+
+        var solicitudes = await _db.VacacionSolicitudes
+            .AsNoTracking()
+            .Include(x => x.Empleado)
+                .ThenInclude(x => x!.Sucursal)
+            .Include(x => x.Empleado)
+                .ThenInclude(x => x!.Departamento)
+            .Include(x => x.Empleado)
+                .ThenInclude(x => x!.Puesto)
+            .Include(x => x.AprobadorEmpleado)
+            .Where(x =>
+                x.Empleado != null &&
+                x.Empleado.Activo &&
+                x.Empleado.EstatusLaboralActual == EstatusLaboralEmpleado.ACTIVO)
+            .ToListAsync(cancellationToken);
+
+        var solicitudesPendientesList = solicitudes
+            .Where(x => x.Estatus == EstatusVacacionSolicitud.PENDIENTE)
+            .ToList();
+
+        var solicitudesAprobadasMesList = solicitudes
+            .Where(x =>
+                x.Estatus == EstatusVacacionSolicitud.APROBADA &&
+                x.FechaResolucionUtc.HasValue &&
+                x.FechaResolucionUtc.Value >= inicioMesUtc &&
+                x.FechaResolucionUtc.Value < inicioMesSiguienteUtc)
+            .ToList();
+
+        var solicitudesRechazadasMes = solicitudes
+            .Count(x =>
+                x.Estatus == EstatusVacacionSolicitud.RECHAZADA &&
+                x.FechaResolucionUtc.HasValue &&
+                x.FechaResolucionUtc.Value >= inicioMesUtc &&
+                x.FechaResolucionUtc.Value < inicioMesSiguienteUtc);
+
+        var solicitudesCanceladasMes = solicitudes
+            .Count(x =>
+                x.Estatus == EstatusVacacionSolicitud.CANCELADA &&
+                x.FechaResolucionUtc.HasValue &&
+                x.FechaResolucionUtc.Value >= inicioMesUtc &&
+                x.FechaResolucionUtc.Value < inicioMesSiguienteUtc);
+
+        var solicitudesPendientesDetalle = solicitudesPendientesList
+            .OrderBy(x => x.CreatedAtUtc)
+            .ThenBy(x => x.FechaInicio)
+            .Take(10)
+            .Select(x => ToSolicitudDashboardDto(x, fechaCorte))
+            .ToList();
+
+        var proximasVacacionesAprobadas = solicitudes
+            .Where(x =>
+                x.Estatus == EstatusVacacionSolicitud.APROBADA &&
+                x.FechaFin >= fechaCorte)
+            .OrderBy(x => x.FechaInicio)
+            .ThenBy(x => x.Empleado!.NumEmpleado)
+            .Take(10)
+            .Select(x => ToSolicitudDashboardDto(x, fechaCorte))
+            .ToList();
 
         var topSaldos = periodosConSaldo
             .GroupBy(x => x.EmpleadoId)
@@ -234,10 +303,62 @@ public sealed class VacacionesDashboardService : IVacacionesDashboardService
             MovimientosMes = movimientosMes,
             MovimientosImportacionLegacy = movimientosImportacionLegacy,
 
+            SolicitudesPendientes = solicitudesPendientesList.Count,
+            SolicitudesAprobadasMes = solicitudesAprobadasMesList.Count,
+            SolicitudesRechazadasMes = solicitudesRechazadasMes,
+            SolicitudesCanceladasMes = solicitudesCanceladasMes,
+
+            DiasSolicitadosPendientes = solicitudesPendientesList.Sum(x => x.DiasSolicitados),
+            DiasAprobadosMes = solicitudesAprobadasMesList.Sum(x => x.DiasSolicitados),
+
             TopSaldos = topSaldos,
             PeriodosPorVencer = periodosPorVencer,
             UltimosMovimientos = ultimosMovimientos,
-            ProximosAniversarios = proximosAniversarios
+            ProximosAniversarios = proximosAniversarios,
+
+            SolicitudesPendientesDetalle = solicitudesPendientesDetalle,
+            ProximasVacacionesAprobadas = proximasVacacionesAprobadas
+        };
+    }
+
+    private static VacacionesDashboardSolicitudDto ToSolicitudDashboardDto(
+        VacacionSolicitud solicitud,
+        DateOnly fechaCorte)
+    {
+        var empleado = solicitud.Empleado!;
+
+        return new VacacionesDashboardSolicitudDto
+        {
+            SolicitudId = solicitud.Id,
+
+            EmpleadoId = empleado.Id,
+            NumEmpleado = empleado.NumEmpleado,
+            NombreEmpleado = BuildNombreEmpleado(empleado),
+
+            Sucursal = empleado.Sucursal?.Nombre,
+            Departamento = empleado.Departamento?.Nombre,
+            Puesto = empleado.Puesto?.Nombre,
+
+            FechaInicio = solicitud.FechaInicio,
+            FechaFin = solicitud.FechaFin,
+
+            DiasSolicitados = solicitud.DiasSolicitados,
+
+            Estatus = solicitud.Estatus.ToString(),
+            EstatusNombre = solicitud.Estatus.ToString(),
+
+            ComentarioEmpleado = solicitud.ComentarioEmpleado,
+
+            AprobadorEmpleadoId = solicitud.AprobadorEmpleadoId,
+            AprobadorEmpleado = solicitud.AprobadorEmpleado != null
+                ? BuildNombreEmpleado(solicitud.AprobadorEmpleado)
+                : null,
+
+            FechaResolucionUtc = solicitud.FechaResolucionUtc,
+
+            DiasParaInicio = solicitud.FechaInicio.DayNumber - fechaCorte.DayNumber,
+
+            CreatedAtUtc = solicitud.CreatedAtUtc
         };
     }
 
