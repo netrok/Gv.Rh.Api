@@ -19,10 +19,11 @@ El servidor Rocky debe operar con:
 - Alertas básicas de health cada 15 minutos.
 - API directa por puerto `8080` expuesta solo en `127.0.0.1`.
 - Web pública por Nginx en puerto `80`.
+- Ambiente staging separado en `/opt/gv-rh-staging`.
 
 ---
 
-## Servicios Docker
+## Servicios Docker Producción
 
 Ruta principal en Rocky:
 
@@ -66,7 +67,7 @@ curl.exe -i http://192.168.0.3/api/health
 
 ---
 
-## Variables importantes
+## Variables importantes Producción
 
 Archivo:
 
@@ -112,7 +113,7 @@ grep -nE "ConnectionStrings__RhDb|POSTGRES_PASSWORD|Jwt__Key|MicrosoftGraphMail_
 
 ---
 
-## Health endpoints
+## Health endpoints Producción
 
 API directa por Kestrel, solo desde Rocky:
 
@@ -149,7 +150,7 @@ JSON esperado:
 
 ---
 
-## Swagger
+## Swagger Producción
 
 En producción debe estar apagado:
 
@@ -187,7 +188,7 @@ Respuesta esperada:
 
 ---
 
-## Flujo normal de deploy API
+## Flujo normal de deploy API Producción
 
 Usar cuando hay cambios normales de código sin migraciones.
 
@@ -230,7 +231,7 @@ Migraciones EF Core omitidas al iniciar. Database:ApplyMigrationsOnStartup=false
 
 ---
 
-## Flujo normal de deploy Web
+## Flujo normal de deploy Web Producción
 
 Usar cuando hay cambios de frontend.
 
@@ -704,7 +705,7 @@ No debe quedar activo el secreto viejo.
 
 ---
 
-## Seguridad de red
+## Seguridad de red Producción
 
 Estado esperado:
 
@@ -749,36 +750,426 @@ HTTP/1.1 200 OK
 
 ---
 
+## Ambiente Staging
+
+El ambiente staging vive en el mismo servidor Rocky, separado de producción.
+
+Ruta staging:
+
+```bash
+/opt/gv-rh-staging
+```
+
+Ruta producción:
+
+```bash
+/opt/gv-rh-demo
+```
+
+Staging se usa para probar cambios de API, frontend, migraciones, restauración de backups y validaciones visuales antes de tocar producción.
+
+No debe compartir base de datos con producción.
+
+---
+
+### Servicios Staging
+
+Servicios esperados:
+
+```txt
+gv-rh-stg-db
+gv-rh-stg-api
+gv-rh-stg-web
+```
+
+Validar estado:
+
+```bash
+cd /opt/gv-rh-staging
+docker compose ps
+```
+
+Estado sano esperado:
+
+```txt
+gv-rh-stg-db    Up ... (healthy)   5432/tcp
+gv-rh-stg-api   Up ... (healthy)   127.0.0.1:18080->8080/tcp
+gv-rh-stg-web   Up ... (healthy)   0.0.0.0:8081->80/tcp
+```
+
+---
+
+### URLs Staging
+
+Desde Rocky:
+
+```bash
+curl -i http://localhost:18080/health
+curl -i http://localhost:8081/
+curl -i http://localhost:8081/api/health
+```
+
+Desde Windows/LAN:
+
+```powershell
+curl.exe -i http://192.168.0.3:8081/
+curl.exe -i http://192.168.0.3:8081/api/health
+curl.exe -i http://192.168.0.3:18080/health
+```
+
+Resultado esperado:
+
+```txt
+http://192.168.0.3:8081/            → HTTP/1.1 200 OK
+http://192.168.0.3:8081/api/health  → HTTP/1.1 200 OK
+http://192.168.0.3:18080/health     → debe fallar desde Windows
+```
+
+La API directa de staging solo debe estar disponible desde Rocky:
+
+```txt
+127.0.0.1:18080
+```
+
+---
+
+### Variables Staging
+
+Archivo:
+
+```bash
+/opt/gv-rh-staging/.env
+```
+
+Variables esperadas:
+
+```env
+ASPNETCORE_ENVIRONMENT=Staging
+POSTGRES_DB=gv_rh_staging
+Database__ApplyMigrationsOnStartup=false
+Database__ExitAfterStartupMaintenance=false
+Swagger__Enabled=true
+Security__UseHttpsRedirection=false
+Notifications__Enabled=false
+Notifications__OutboxEnabled=false
+Notifications__AprobacionesSchedulerEnabled=false
+```
+
+Staging debe tener secretos propios, diferentes de producción:
+
+```env
+POSTGRES_PASSWORD=...
+ConnectionStrings__RhDb=...
+Jwt__Key=...
+```
+
+No pegar `.env` completo en chats, correos o tickets.
+
+Validar sin mostrar secretos:
+
+```bash
+cd /opt/gv-rh-staging
+
+grep -nE "ASPNETCORE_ENVIRONMENT|POSTGRES_DB|POSTGRES_PASSWORD|ConnectionStrings__RhDb|Jwt__Key|Swagger__Enabled|Notifications__Enabled|Notifications__OutboxEnabled|Notifications__AprobacionesSchedulerEnabled" .env \
+| sed -E 's/Password=[^;]*/Password=***MASKED***/; s/(POSTGRES_PASSWORD=).*/\1***MASKED***/; s/(Jwt__Key=).*/\1***MASKED***/'
+```
+
+---
+
+### Notificaciones en Staging
+
+Por seguridad, staging debe tener notificaciones apagadas:
+
+```env
+Notifications__Enabled=false
+Notifications__OutboxEnabled=false
+Notifications__AprobacionesSchedulerEnabled=false
+```
+
+Microsoft Graph en staging no debe usarse para enviar correos reales a empleados.
+
+Si en algún momento se prueba correo en staging, debe enviarse únicamente a Sistemas.
+
+---
+
+### Swagger en Staging
+
+En staging Swagger puede estar activo:
+
+```env
+Swagger__Enabled=true
+```
+
+Validar desde Rocky:
+
+```bash
+curl -I http://localhost:18080/swagger/index.html
+```
+
+---
+
+### Restaurar backup de producción en Staging
+
+Este procedimiento restaura un backup de producción dentro de la base staging `gv_rh_staging`.
+
+No toca producción.
+
+Entrar a staging:
+
+```bash
+cd /opt/gv-rh-staging
+```
+
+Tomar último backup de producción:
+
+```bash
+LATEST_PROD_BACKUP="$(ls -t /opt/gv-rh-demo/backups/gv_rh_manual_*.backup /opt/gv-rh-demo/backups/gv_rh_auto_*.backup 2>/dev/null | head -n 1)"
+
+echo "$LATEST_PROD_BACKUP"
+ls -lh "$LATEST_PROD_BACKUP"
+```
+
+Validar catálogo:
+
+```bash
+docker compose exec -T db pg_restore -l < "$LATEST_PROD_BACKUP" | head -n 25
+```
+
+Recrear base staging:
+
+```bash
+docker compose exec -T db dropdb -U postgres --if-exists gv_rh_staging
+docker compose exec -T db createdb -U postgres gv_rh_staging
+```
+
+Restaurar backup en staging:
+
+```bash
+docker compose exec -T db pg_restore \
+  -U postgres \
+  -d gv_rh_staging \
+  --no-owner \
+  --no-privileges \
+  --exit-on-error \
+  < "$LATEST_PROD_BACKUP"
+```
+
+Validar datos restaurados:
+
+```bash
+docker compose exec -T db psql -U postgres -d gv_rh_staging -c '
+SELECT
+  (SELECT COUNT(*) FROM users) AS users,
+  (SELECT COUNT(*) FROM departamentos) AS departamentos,
+  (SELECT COUNT(*) FROM empleados) AS empleados,
+  (SELECT COUNT(*) FROM "__EFMigrationsHistory") AS migrations;
+'
+```
+
+Validar tablas:
+
+```bash
+docker compose exec -T db psql -U postgres -d gv_rh_staging -c "SELECT COUNT(*) AS tablas_publicas FROM information_schema.tables WHERE table_schema = 'public';"
+```
+
+---
+
+### Levantar Staging
+
+Construir API y Web:
+
+```bash
+cd /opt/gv-rh-staging
+docker compose build api web
+```
+
+Levantar servicios:
+
+```bash
+docker compose up -d api web
+sleep 60
+docker compose ps
+```
+
+Validar:
+
+```bash
+curl -i http://localhost:18080/health
+curl -i http://localhost:8081/
+curl -i http://localhost:8081/api/health
+```
+
+El health debe responder:
+
+```json
+{
+  "status": "ok",
+  "app": "Gv.Rh.Api",
+  "environment": "Staging",
+  "database": {
+    "status": "ok",
+    "provider": "PostgreSQL"
+  }
+}
+```
+
+---
+
+### Archivos copiados manualmente para Web Staging
+
+El repo web clonado no incluía inicialmente los archivos requeridos por Docker para Rocky.
+
+Se copiaron desde producción:
+
+```bash
+cp /opt/gv-rh-demo/web/Dockerfile /opt/gv-rh-staging/web/Dockerfile
+cp -r /opt/gv-rh-demo/web/nginx /opt/gv-rh-staging/web/
+```
+
+Archivos esperados:
+
+```bash
+/opt/gv-rh-staging/web/Dockerfile
+/opt/gv-rh-staging/web/nginx/default.conf
+```
+
+Validar:
+
+```bash
+ls -lah /opt/gv-rh-staging/web/Dockerfile
+ls -lah /opt/gv-rh-staging/web/nginx/default.conf
+```
+
+Pendiente recomendado:
+
+```txt
+Agregar Dockerfile y nginx/default.conf al repo gv-rh-web para no depender de copias manuales.
+```
+
+---
+
+### Prueba inicial validada Staging
+
+Staging manual inicial validado:
+
+```txt
+Ruta: /opt/gv-rh-staging
+DB: gv_rh_staging
+API directa: 127.0.0.1:18080
+Web: 0.0.0.0:8081
+Notificaciones: apagadas
+Swagger: activo
+```
+
+Datos restaurados desde backup de producción:
+
+```txt
+users: 7
+departamentos: 25
+empleados: 118
+migrations: 10
+tablas_publicas: 21
+```
+
+Estado final esperado:
+
+```txt
+gv-rh-stg-db    healthy
+gv-rh-stg-api   healthy
+gv-rh-stg-web   healthy
+8081/            HTTP 200 OK
+8081/api/health  HTTP 200 OK
+18080 desde LAN  bloqueado
+```
+
+---
+
+### Validar que producción sigue sana después de Staging
+
+Después de cualquier operación en staging:
+
+```bash
+cd /opt/gv-rh-demo
+
+docker compose ps
+curl -i http://localhost/api/health
+```
+
+Producción debe seguir:
+
+```txt
+gv-rh-api   healthy
+gv-rh-db    healthy
+gv-rh-web   healthy
+/api/health HTTP/1.1 200 OK
+environment Production
+database.status ok
+```
+
+---
+
 ## Logs frecuentes
 
-API:
+API producción:
 
 ```bash
 cd /opt/gv-rh-demo
 docker compose logs --tail=120 api
 ```
 
-Web:
+Web producción:
 
 ```bash
+cd /opt/gv-rh-demo
 docker compose logs --tail=120 web
 ```
 
-DB:
+DB producción:
 
 ```bash
+cd /opt/gv-rh-demo
+docker compose logs --tail=120 db
+```
+
+API staging:
+
+```bash
+cd /opt/gv-rh-staging
+docker compose logs --tail=120 api
+```
+
+Web staging:
+
+```bash
+cd /opt/gv-rh-staging
+docker compose logs --tail=120 web
+```
+
+DB staging:
+
+```bash
+cd /opt/gv-rh-staging
 docker compose logs --tail=120 db
 ```
 
 Seguir logs en vivo:
 
 ```bash
+cd /opt/gv-rh-demo
 docker compose logs -f api
 ```
 
-Filtrar errores API:
+Filtrar errores API producción:
 
 ```bash
+cd /opt/gv-rh-demo
+docker compose logs --tail=120 api | grep -Ei "fail|error|exception|Npgsql|authentication|password|Application started|Hosting environment" || true
+```
+
+Filtrar errores API staging:
+
+```bash
+cd /opt/gv-rh-staging
 docker compose logs --tail=120 api | grep -Ei "fail|error|exception|Npgsql|authentication|password|Application started|Hosting environment" || true
 ```
 
@@ -786,22 +1177,45 @@ docker compose logs --tail=120 api | grep -Ei "fail|error|exception|Npgsql|authe
 
 ## Reinicios controlados
 
-Reiniciar solo API:
+Reiniciar solo API producción:
 
 ```bash
 cd /opt/gv-rh-demo
 docker compose restart api
 ```
 
-Recrear solo API:
+Recrear solo API producción:
 
 ```bash
+cd /opt/gv-rh-demo
 docker compose up -d --no-deps --force-recreate api
 ```
 
-Recrear solo Web:
+Recrear solo Web producción:
 
 ```bash
+cd /opt/gv-rh-demo
+docker compose up -d --no-deps --force-recreate web
+```
+
+Reiniciar solo API staging:
+
+```bash
+cd /opt/gv-rh-staging
+docker compose restart api
+```
+
+Recrear solo API staging:
+
+```bash
+cd /opt/gv-rh-staging
+docker compose up -d --no-deps --force-recreate api
+```
+
+Recrear solo Web staging:
+
+```bash
+cd /opt/gv-rh-staging
 docker compose up -d --no-deps --force-recreate web
 ```
 
@@ -813,9 +1227,9 @@ docker compose ps
 
 ---
 
-## Validación rápida post-deploy
+## Validación rápida post-deploy Producción
 
-Después de cualquier deploy:
+Después de cualquier deploy en producción:
 
 ```bash
 cd /opt/gv-rh-demo
@@ -834,6 +1248,35 @@ Web healthy
 /api/health responde 200 OK
 Application started
 Hosting environment: Production
+No hay errores críticos
+```
+
+---
+
+## Validación rápida post-deploy Staging
+
+Después de cualquier deploy en staging:
+
+```bash
+cd /opt/gv-rh-staging
+
+docker compose ps
+curl -i http://localhost:18080/health
+curl -i http://localhost:8081/
+curl -i http://localhost:8081/api/health
+docker compose logs --tail=80 api
+```
+
+Checklist:
+
+```txt
+API staging healthy
+DB staging healthy
+Web staging healthy
+8081 responde 200 OK
+8081/api/health responde 200 OK
+Application started
+Hosting environment: Staging
 No hay errores críticos
 ```
 
@@ -1181,6 +1624,42 @@ POSTGRES_PASSWORD
 
 ---
 
+## Limpieza segura Docker
+
+Validar consumo:
+
+```bash
+docker system df
+df -h .
+```
+
+Limpieza segura de build cache:
+
+```bash
+docker builder prune -af
+```
+
+Validar después:
+
+```bash
+docker system df
+df -h .
+docker compose ps
+curl -i http://localhost/api/health
+```
+
+No ejecutar sin revisión previa:
+
+```bash
+docker system prune -a
+docker volume prune
+docker system prune --volumes
+```
+
+Especialmente `--volumes` puede borrar datos si no se revisa correctamente.
+
+---
+
 ## Comandos de emergencia
 
 Ver disco:
@@ -1213,19 +1692,27 @@ Ver puertos publicados:
 
 ```bash
 docker compose ps
-ss -tulpn | grep -E ':80|:8080|:5432' || true
+ss -tulpn | grep -E ':80|:8080|:5432|:8081|:18080' || true
 ```
 
-Validar API por Nginx:
+Validar API por Nginx producción:
 
 ```bash
 curl -i http://localhost/api/health
 ```
 
-Validar API directa local:
+Validar API directa local producción:
 
 ```bash
 curl -i http://localhost:8080/health
+```
+
+Validar Staging:
+
+```bash
+curl -i http://localhost:8081/
+curl -i http://localhost:8081/api/health
+curl -i http://localhost:18080/health
 ```
 
 ---
@@ -1242,5 +1729,8 @@ curl -i http://localhost:8080/health
 8. No cambiar HTTPS/SSL sin revisar Nginx y certificados.
 9. No exponer Swagger en Production.
 10. No exponer API directa a la LAN por puerto `8080`.
-11. Si algo falla, revisar logs antes de reiniciar todo.
-12. Si se expone un secreto, se rota.
+11. No exponer API directa de staging a la LAN por puerto `18080`.
+12. Staging no debe mandar correos reales a empleados.
+13. Si algo falla, revisar logs antes de reiniciar todo.
+14. Si se expone un secreto, se rota.
+15. Staging sirve para probar; producción sirve para operar.
