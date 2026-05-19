@@ -295,6 +295,118 @@ public sealed class VacacionesReportService : IVacacionesReportService
         };
     }
 
+
+    public async Task<VacacionesCalendarioReporteResultDto> GetCalendarioAsync(
+        VacacionesCalendarioReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var range = ResolveCalendarioRange(query);
+        var rows = await GetCalendarioRowsAsync(query, cancellationToken);
+
+        var sucursalPrincipal = rows
+            .GroupBy(x => CorporateReportFormatters.NullSafe(x.Sucursal, "(sin sucursal)"))
+            .OrderByDescending(x => x.Count())
+            .ThenBy(x => x.Key)
+            .Select(x => x.Key)
+            .FirstOrDefault() ?? "—";
+
+        return new VacacionesCalendarioReporteResultDto
+        {
+            FechaDesde = range.FechaDesde,
+            FechaHasta = range.FechaHasta,
+            TotalSolicitudes = rows.Count,
+            TotalEmpleados = rows.Select(x => x.EmpleadoId).Distinct().Count(),
+            TotalDias = rows.Sum(x => x.DiasSolicitados),
+            SucursalPrincipal = sucursalPrincipal,
+            Items = rows
+        };
+    }
+
+    public async Task<ReportFileDto> BuildCalendarioPdfAsync(
+        VacacionesCalendarioReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var result = await GetCalendarioAsync(query, cancellationToken);
+        var filterLabels = await ResolveCalendarioFilterLabelsAsync(query, cancellationToken);
+        var generatedAtUtc = DateTime.UtcNow;
+
+        var pdfBytes = Document.Create(document =>
+        {
+            document.Page(page =>
+            {
+                page.Size(PageSizes.A4.Landscape());
+                page.Margin(1.2f, Unit.Centimetre);
+                page.DefaultTextStyle(x => x.FontSize(8.4f).FontColor(CorporateReportPalette.Ink900));
+
+                page.Header().Element(container =>
+                    CorporatePdfBlocks.ComposeReportHeader(
+                        container,
+                        "Calendario de vacaciones",
+                        "Reporte de vacaciones aprobadas por rango de fechas",
+                        generatedAtUtc,
+                        rightBadgeText: "Vacaciones"));
+
+                page.Content().Column(column =>
+                {
+                    column.Spacing(10);
+
+                    column.Item().Element(container =>
+                        CorporatePdfBlocks.ComposeFiltersPanel(
+                            container,
+                            "Filtros aplicados",
+                            BuildCalendarioFilterItems(filterLabels)));
+
+                    column.Item().Element(container =>
+                        CorporatePdfBlocks.ComposeKpiRow(
+                            container,
+                            (
+                                "Solicitudes",
+                                result.TotalSolicitudes.ToString(CultureInfo.InvariantCulture),
+                                "Aprobadas visibles",
+                                CorporateReportPalette.KpiPrimary
+                            ),
+                            (
+                                "Empleados",
+                                result.TotalEmpleados.ToString(CultureInfo.InvariantCulture),
+                                "Personas distintas",
+                                CorporateReportPalette.KpiSuccess
+                            ),
+                            (
+                                "Días aprobados",
+                                FormatDecimal(result.TotalDias),
+                                "Total solicitado",
+                                CorporateReportPalette.KpiTeal
+                            ),
+                            (
+                                "Sucursal principal",
+                                result.SucursalPrincipal,
+                                "Mayor concentración",
+                                CorporateReportPalette.KpiWarning
+                            ),
+                            (
+                                "Rango",
+                                $"{CorporateReportFormatters.FormatDate(result.FechaDesde)} - {CorporateReportFormatters.FormatDate(result.FechaHasta)}",
+                                "Periodo del reporte",
+                                CorporateReportPalette.BrandPrimary
+                            )));
+
+                    column.Item().Element(container => ComposeCalendarioDistributionSection(container, result.Items));
+                    column.Item().Element(container => ComposeCalendarioDetailSection(container, result.Items));
+                });
+
+                page.Footer().Element(container =>
+                    CorporatePdfBlocks.ComposeReportFooter(container, generatedAtUtc));
+            });
+        }).GeneratePdf();
+
+        return new ReportFileDto
+        {
+            Content = pdfBytes,
+            ContentType = "application/pdf",
+            FileName = BuildCalendarioFileName(query, "pdf")
+        };
+    }
+
     private IQueryable<VacacionPeriodo> BuildBaseQuery(VacacionesSaldosReporteQueryDto query)
     {
         var periodosQuery = _context.VacacionPeriodos
@@ -1794,6 +1906,406 @@ public sealed class VacacionesReportService : IVacacionesReportService
             .ToList();
     }
 
+
+    private IQueryable<VacacionSolicitud> BuildCalendarioBaseQuery(
+        VacacionesCalendarioReporteQueryDto query,
+        DateOnly fechaDesde,
+        DateOnly fechaHasta)
+    {
+        var solicitudesQuery = _context.VacacionSolicitudes
+            .AsNoTracking()
+            .Include(x => x.Empleado)
+                .ThenInclude(x => x!.Sucursal)
+            .Include(x => x.Empleado)
+                .ThenInclude(x => x!.Departamento)
+            .Include(x => x.Empleado)
+                .ThenInclude(x => x!.Puesto)
+            .Include(x => x.AprobadorEmpleado)
+            .Where(x => x.Estatus == EstatusVacacionSolicitud.APROBADA)
+            .Where(x => x.FechaFin >= fechaDesde && x.FechaInicio <= fechaHasta)
+            .AsQueryable();
+
+        if (query.EmpleadoId.HasValue)
+            solicitudesQuery = solicitudesQuery.Where(x => x.EmpleadoId == query.EmpleadoId.Value);
+
+        if (query.SucursalId.HasValue)
+            solicitudesQuery = solicitudesQuery.Where(x =>
+                x.Empleado != null &&
+                x.Empleado.SucursalId == query.SucursalId.Value);
+
+        if (query.DepartamentoId.HasValue)
+            solicitudesQuery = solicitudesQuery.Where(x =>
+                x.Empleado != null &&
+                x.Empleado.DepartamentoId == query.DepartamentoId.Value);
+
+        if (query.PuestoId.HasValue)
+            solicitudesQuery = solicitudesQuery.Where(x =>
+                x.Empleado != null &&
+                x.Empleado.PuestoId == query.PuestoId.Value);
+
+        if (query.SoloActivos == true)
+            solicitudesQuery = solicitudesQuery.Where(x =>
+                x.Empleado != null &&
+                x.Empleado.Activo &&
+                x.Empleado.EstatusLaboralActual == EstatusLaboralEmpleado.ACTIVO);
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var term = query.Search.Trim();
+
+            solicitudesQuery = solicitudesQuery.Where(x =>
+                x.Empleado != null &&
+                (
+                    EF.Functions.ILike(x.Empleado.NumEmpleado, $"%{term}%") ||
+                    EF.Functions.ILike(x.Empleado.Nombres, $"%{term}%") ||
+                    EF.Functions.ILike(x.Empleado.ApellidoPaterno, $"%{term}%") ||
+                    (x.Empleado.ApellidoMaterno != null && EF.Functions.ILike(x.Empleado.ApellidoMaterno, $"%{term}%")) ||
+                    (x.Empleado.Sucursal != null && EF.Functions.ILike(x.Empleado.Sucursal.Nombre, $"%{term}%")) ||
+                    (x.Empleado.Departamento != null && EF.Functions.ILike(x.Empleado.Departamento.Nombre, $"%{term}%")) ||
+                    (x.Empleado.Puesto != null && EF.Functions.ILike(x.Empleado.Puesto.Nombre, $"%{term}%"))
+                ));
+        }
+
+        return solicitudesQuery;
+    }
+
+    private async Task<List<VacacionesCalendarioReporteRowDto>> GetCalendarioRowsAsync(
+        VacacionesCalendarioReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var range = ResolveCalendarioRange(query);
+
+        var rawRows = await BuildCalendarioBaseQuery(query, range.FechaDesde, range.FechaHasta)
+            .OrderBy(x => x.FechaInicio)
+            .ThenBy(x => x.FechaFin)
+            .ThenBy(x => x.Empleado!.NumEmpleado)
+            .ThenBy(x => x.Id)
+            .Select(x => new
+            {
+                SolicitudId = x.Id,
+                x.EmpleadoId,
+                NumEmpleado = x.Empleado != null ? x.Empleado.NumEmpleado : string.Empty,
+                Nombres = x.Empleado != null ? x.Empleado.Nombres : string.Empty,
+                ApellidoPaterno = x.Empleado != null ? x.Empleado.ApellidoPaterno : string.Empty,
+                ApellidoMaterno = x.Empleado != null ? x.Empleado.ApellidoMaterno : null,
+                Sucursal = x.Empleado != null && x.Empleado.Sucursal != null ? x.Empleado.Sucursal.Nombre : null,
+                Departamento = x.Empleado != null && x.Empleado.Departamento != null ? x.Empleado.Departamento.Nombre : null,
+                Puesto = x.Empleado != null && x.Empleado.Puesto != null ? x.Empleado.Puesto.Nombre : null,
+                x.FechaInicio,
+                x.FechaFin,
+                x.DiasSolicitados,
+                Estatus = x.Estatus.ToString(),
+                x.AprobadorEmpleadoId,
+                AprobadorNombres = x.AprobadorEmpleado != null ? x.AprobadorEmpleado.Nombres : null,
+                AprobadorApellidoPaterno = x.AprobadorEmpleado != null ? x.AprobadorEmpleado.ApellidoPaterno : null,
+                AprobadorApellidoMaterno = x.AprobadorEmpleado != null ? x.AprobadorEmpleado.ApellidoMaterno : null,
+                x.FechaResolucionUtc,
+                x.CreatedAtUtc
+            })
+            .ToListAsync(cancellationToken);
+
+        return rawRows.Select(x => new VacacionesCalendarioReporteRowDto
+        {
+            SolicitudId = x.SolicitudId,
+            EmpleadoId = x.EmpleadoId,
+            NumEmpleado = x.NumEmpleado,
+            NombreEmpleado = CorporateReportFormatters.CombineFullName(
+                x.Nombres,
+                x.ApellidoPaterno,
+                x.ApellidoMaterno),
+            Sucursal = x.Sucursal,
+            Departamento = x.Departamento,
+            Puesto = x.Puesto,
+            FechaInicio = x.FechaInicio,
+            FechaFin = x.FechaFin,
+            DiasSolicitados = x.DiasSolicitados,
+            Estatus = x.Estatus,
+            AprobadorEmpleadoId = x.AprobadorEmpleadoId,
+            AprobadorEmpleado = string.IsNullOrWhiteSpace(x.AprobadorNombres)
+                ? null
+                : CorporateReportFormatters.CombineFullName(
+                    x.AprobadorNombres ?? string.Empty,
+                    x.AprobadorApellidoPaterno ?? string.Empty,
+                    x.AprobadorApellidoMaterno),
+            FechaResolucionUtc = x.FechaResolucionUtc,
+            CreatedAtUtc = x.CreatedAtUtc
+        }).ToList();
+    }
+
+    private async Task<VacacionesCalendarioFilterLabels> ResolveCalendarioFilterLabelsAsync(
+        VacacionesCalendarioReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var range = ResolveCalendarioRange(query);
+
+        var labels = new VacacionesCalendarioFilterLabels
+        {
+            Sucursal = "(todas)",
+            Departamento = "(todos)",
+            Puesto = "(todos)",
+            Empleado = "(todos)",
+            FechaDesde = CorporateReportFormatters.FormatDate(range.FechaDesde),
+            FechaHasta = CorporateReportFormatters.FormatDate(range.FechaHasta),
+            SoloActivos = query.SoloActivos.HasValue
+                ? CorporateReportFormatters.FormatBool(query.SoloActivos.Value)
+                : "(todos)",
+            Search = CorporateReportFormatters.FormatSearchTerm(query.Search)
+        };
+
+        if (query.SucursalId.HasValue)
+        {
+            labels.Sucursal = await _context.Sucursales
+                .AsNoTracking()
+                .Where(x => x.Id == query.SucursalId.Value)
+                .Select(x => x.Nombre)
+                .FirstOrDefaultAsync(cancellationToken) ?? $"#{query.SucursalId.Value}";
+        }
+
+        if (query.DepartamentoId.HasValue)
+        {
+            labels.Departamento = await _context.Departamentos
+                .AsNoTracking()
+                .Where(x => x.Id == query.DepartamentoId.Value)
+                .Select(x => x.Nombre)
+                .FirstOrDefaultAsync(cancellationToken) ?? $"#{query.DepartamentoId.Value}";
+        }
+
+        if (query.PuestoId.HasValue)
+        {
+            labels.Puesto = await _context.Puestos
+                .AsNoTracking()
+                .Where(x => x.Id == query.PuestoId.Value)
+                .Select(x => x.Nombre)
+                .FirstOrDefaultAsync(cancellationToken) ?? $"#{query.PuestoId.Value}";
+        }
+
+        if (query.EmpleadoId.HasValue)
+        {
+            labels.Empleado = await _context.Empleados
+                .AsNoTracking()
+                .Where(x => x.Id == query.EmpleadoId.Value)
+                .Select(x => x.NumEmpleado + " · " + x.Nombres + " " + x.ApellidoPaterno)
+                .FirstOrDefaultAsync(cancellationToken) ?? $"#{query.EmpleadoId.Value}";
+        }
+
+        return labels;
+    }
+
+    private static IReadOnlyList<(string Label, string Value)> BuildCalendarioFilterItems(
+        VacacionesCalendarioFilterLabels labels)
+    {
+        return
+        [
+            ("Sucursal", labels.Sucursal),
+            ("Departamento", labels.Departamento),
+            ("Puesto", labels.Puesto),
+            ("Empleado", labels.Empleado),
+            ("Fecha desde", labels.FechaDesde),
+            ("Fecha hasta", labels.FechaHasta),
+            ("Solo activos", labels.SoloActivos),
+            ("Búsqueda", labels.Search)
+        ];
+    }
+
+    private static void ComposeCalendarioDistributionSection(
+        IContainer container,
+        IReadOnlyList<VacacionesCalendarioReporteRowDto> rows)
+    {
+        CorporatePdfBlocks.ComposeSection(container, "Resumen por grupos", body =>
+        {
+            body.Item().Row(row =>
+            {
+                row.Spacing(12);
+
+                row.RelativeItem().Column(left =>
+                {
+                    left.Spacing(4);
+
+                    left.Item().Text("Por sucursal")
+                        .FontSize(9.5f)
+                        .SemiBold()
+                        .FontColor(CorporateReportPalette.Ink700);
+
+                    var groups = rows
+                        .GroupBy(x => CorporateReportFormatters.NullSafe(x.Sucursal, "(sin sucursal)"))
+                        .OrderByDescending(x => x.Count())
+                        .ThenBy(x => x.Key)
+                        .Take(10)
+                        .ToList();
+
+                    if (groups.Count == 0)
+                    {
+                        left.Item().Text("Sin registros para resumir.")
+                            .FontSize(8.5f)
+                            .FontColor(CorporateReportPalette.Ink500);
+                    }
+                    else
+                    {
+                        foreach (var group in groups)
+                        {
+                            left.Item().Text(text =>
+                            {
+                                text.Span($"{group.Key}: ")
+                                    .SemiBold()
+                                    .FontColor(CorporateReportPalette.Ink700);
+
+                                text.Span($"{group.Count()} solicitud(es), {FormatDecimal(group.Sum(x => x.DiasSolicitados))} días")
+                                    .FontColor(CorporateReportPalette.Ink900);
+                            });
+                        }
+                    }
+                });
+
+                row.RelativeItem().Column(right =>
+                {
+                    right.Spacing(4);
+
+                    right.Item().Text("Por departamento")
+                        .FontSize(9.5f)
+                        .SemiBold()
+                        .FontColor(CorporateReportPalette.Ink700);
+
+                    var groups = rows
+                        .GroupBy(x => CorporateReportFormatters.NullSafe(x.Departamento, "(sin departamento)"))
+                        .OrderByDescending(x => x.Count())
+                        .ThenBy(x => x.Key)
+                        .Take(10)
+                        .ToList();
+
+                    if (groups.Count == 0)
+                    {
+                        right.Item().Text("Sin registros para resumir.")
+                            .FontSize(8.5f)
+                            .FontColor(CorporateReportPalette.Ink500);
+                    }
+                    else
+                    {
+                        foreach (var group in groups)
+                        {
+                            right.Item().Text(text =>
+                            {
+                                text.Span($"{group.Key}: ")
+                                    .SemiBold()
+                                    .FontColor(CorporateReportPalette.Ink700);
+
+                                text.Span($"{group.Count()} solicitud(es), {FormatDecimal(group.Sum(x => x.DiasSolicitados))} días")
+                                    .FontColor(CorporateReportPalette.Ink900);
+                            });
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    private static void ComposeCalendarioDetailSection(
+        IContainer container,
+        IReadOnlyList<VacacionesCalendarioReporteRowDto> rows)
+    {
+        CorporatePdfBlocks.ComposeSection(container, "Detalle de vacaciones aprobadas", body =>
+        {
+            if (rows.Count == 0)
+            {
+                body.Item().Element(c =>
+                    CorporatePdfBlocks.ComposeEmptyState(c, "No se encontraron vacaciones aprobadas con los filtros aplicados."));
+                return;
+            }
+
+            body.Item().Table(table =>
+            {
+                table.ColumnsDefinition(columns =>
+                {
+                    columns.ConstantColumn(58);
+                    columns.RelativeColumn(2.3f);
+                    columns.RelativeColumn(1.25f);
+                    columns.RelativeColumn(1.25f);
+                    columns.RelativeColumn(1.25f);
+                    columns.ConstantColumn(58);
+                    columns.ConstantColumn(58);
+                    columns.ConstantColumn(42);
+                    columns.RelativeColumn(1.35f);
+                });
+
+                table.Header(header =>
+                {
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Folio");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Empleado");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Sucursal");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Depto.");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Puesto");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Inicio");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Fin");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Días");
+                    header.Cell().Element(c => c.TableHeaderCell()).Text("Aprobador");
+                });
+
+                for (var index = 0; index < rows.Count; index++)
+                {
+                    var item = rows[index];
+                    var background = CorporatePdfStyles.ZebraRow(index);
+
+                    table.Cell().Element(c => c.TableDataCell(background, emphasize: true))
+                        .Text($"SOL-VAC-{item.SolicitudId}");
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text($"{CorporateReportFormatters.NullSafe(item.NombreEmpleado)} ({CorporateReportFormatters.NullSafe(item.NumEmpleado)})");
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.NullSafe(item.Sucursal, "(sin sucursal)"));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.NullSafe(item.Departamento, "(sin depto.)"));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.NullSafe(item.Puesto, "(sin puesto)"));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.FormatDate(item.FechaInicio));
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.FormatDate(item.FechaFin));
+
+                    table.Cell().Element(c => c.TableDataCell(background, emphasize: true))
+                        .Text(FormatDecimal(item.DiasSolicitados))
+                        .FontColor(CorporateReportPalette.Success)
+                        .SemiBold();
+
+                    table.Cell().Element(c => c.TableDataCell(background))
+                        .Text(CorporateReportFormatters.NullSafe(item.AprobadorEmpleado, "—"));
+                }
+            });
+        });
+    }
+
+    private static (DateOnly FechaDesde, DateOnly FechaHasta) ResolveCalendarioRange(
+        VacacionesCalendarioReporteQueryDto query)
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var fechaDesde = query.FechaDesde ?? new DateOnly(today.Year, today.Month, 1);
+        var fechaHasta = query.FechaHasta ?? fechaDesde.AddMonths(1).AddDays(-1);
+
+        if (fechaHasta < fechaDesde)
+            (fechaDesde, fechaHasta) = (fechaHasta, fechaDesde);
+
+        return (fechaDesde, fechaHasta);
+    }
+
+    private static string BuildCalendarioFileName(
+        VacacionesCalendarioReporteQueryDto query,
+        string extension)
+    {
+        var range = ResolveCalendarioRange(query);
+
+        return CorporateReportFormatters.BuildTimestampedFileName(
+            "vacaciones_calendario",
+            extension,
+            $"desde_{range.FechaDesde.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}",
+            $"hasta_{range.FechaHasta.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}",
+            query.SucursalId.HasValue ? $"sucursal_{query.SucursalId.Value}" : null,
+            query.DepartamentoId.HasValue ? $"departamento_{query.DepartamentoId.Value}" : null,
+            query.EmpleadoId.HasValue ? $"empleado_{query.EmpleadoId.Value}" : null);
+    }
+
     private static DateOnly ResolveFechaCorte(VacacionesSaldosReporteQueryDto query)
     {
         return query.FechaCorte ?? DateOnly.FromDateTime(DateTime.Today);
@@ -1860,9 +2372,18 @@ public sealed class VacacionesReportService : IVacacionesReportService
         public string SoloActivos { get; set; } = "(todos)";
         public string Search { get; set; } = "(vacío)";
     }
+
+    private sealed class VacacionesCalendarioFilterLabels
+    {
+        public string Sucursal { get; set; } = "(todas)";
+        public string Departamento { get; set; } = "(todos)";
+        public string Puesto { get; set; } = "(todos)";
+        public string Empleado { get; set; } = "(todos)";
+        public string FechaDesde { get; set; } = "(inicio)";
+        public string FechaHasta { get; set; } = "(fin)";
+        public string SoloActivos { get; set; } = "(todos)";
+        public string Search { get; set; } = "(vacío)";
+    }
+
+
 }
-
-
-
-
-

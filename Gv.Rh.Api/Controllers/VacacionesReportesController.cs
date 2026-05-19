@@ -107,4 +107,20 @@ public sealed class VacacionesReportesController : ControllerBase
             file.ContentType,
             file.FileName);
     }
+
+    [HttpGet("calendario/export/pdf")]
+    [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK)]
+    public async Task<IActionResult> ExportCalendarioPdf(
+        [FromQuery] VacacionesCalendarioReporteQueryDto query,
+        CancellationToken cancellationToken)
+    {
+        var file = await _vacacionesReportService.BuildCalendarioPdfAsync(
+            query,
+            cancellationToken);
+
+        return File(
+            file.Content,
+            file.ContentType,
+            file.FileName);
+    }
 }

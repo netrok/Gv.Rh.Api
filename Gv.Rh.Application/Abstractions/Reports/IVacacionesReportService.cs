@@ -28,4 +28,12 @@ public interface IVacacionesReportService
     Task<ReportFileDto> BuildKardexPdfAsync(
         VacacionesKardexReporteQueryDto query,
         CancellationToken cancellationToken);
+
+    Task<VacacionesCalendarioReporteResultDto> GetCalendarioAsync(
+        VacacionesCalendarioReporteQueryDto query,
+        CancellationToken cancellationToken);
+
+    Task<ReportFileDto> BuildCalendarioPdfAsync(
+        VacacionesCalendarioReporteQueryDto query,
+        CancellationToken cancellationToken);
 }
