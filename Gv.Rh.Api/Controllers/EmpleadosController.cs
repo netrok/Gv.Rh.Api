@@ -199,7 +199,6 @@ _env = env;
             : Ok(dto);
     }
 
-    [AllowAnonymous]
     [HttpGet("{id:int}/foto")]
     public async Task<IActionResult> GetFoto(int id)
     {
