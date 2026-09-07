@@ -17,7 +17,15 @@ ENV ASPNETCORE_ENVIRONMENT=Production
 
 COPY --from=build /app/publish ./
 
-RUN mkdir -p /app/wwwroot /app/storage
+RUN mkdir -p /app/wwwroot /app/storage /app/dataprotection
+
+# Usuario no-root: UID/GID fijos (1000) para poder alinear permisos
+# con los volumenes del host en Rocky (ver RUNBOOK.md, seccion DataProtection).
+RUN groupadd -g 1000 gvrh \
+    && useradd -u 1000 -g gvrh -M -s /usr/sbin/nologin gvrh \
+    && chown -R gvrh:gvrh /app
+
+USER gvrh
 
 EXPOSE 8080
 
