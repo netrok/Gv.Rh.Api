@@ -10,6 +10,7 @@ using Gv.Rh.Infrastructure.Services;
 using Gv.Rh.Infrastructure.Services.Reclutamiento;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -19,17 +20,17 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Serialization;
-
+ 
 var builder = WebApplication.CreateBuilder(args);
-
+ 
 var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"];
 var dataProtectionApplicationName =
     builder.Configuration["DataProtection:ApplicationName"] ?? "Gv.Rh.Api";
-
+ 
 if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
 {
     Directory.CreateDirectory(dataProtectionKeysPath);
-
+ 
     builder.Services
         .AddDataProtection()
         .SetApplicationName(dataProtectionApplicationName)
@@ -41,10 +42,10 @@ else
         .AddDataProtection()
         .SetApplicationName(dataProtectionApplicationName);
 }
-
+ 
 // QuestPDF license
 QuestPDF.Settings.License = LicenseType.Community;
-
+ 
 // Controllers + JSON
 builder.Services
     .AddControllers()
@@ -52,7 +53,7 @@ builder.Services
     {
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
     });
-
+ 
 // Swagger + Bearer
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -62,7 +63,7 @@ builder.Services.AddSwaggerGen(c =>
         Title = "Gv.Rh.Api",
         Version = "v1"
     });
-
+ 
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Name = "Authorization",
@@ -72,7 +73,7 @@ builder.Services.AddSwaggerGen(c =>
         In = ParameterLocation.Header,
         Description = "Pega únicamente el access token. No pegues JSON ni refresh token."
     });
-
+ 
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
@@ -88,48 +89,48 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 });
-
+ 
 // Helper: permite localhost y hosts LAN privados típicos para Vite/React
 static bool IsAllowedFrontendOrigin(string? origin)
 {
     if (string.IsNullOrWhiteSpace(origin))
         return false;
-
+ 
     if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
         return false;
-
+ 
     if (!string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase) &&
         !string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
         return false;
-
+ 
     if (uri.Port != 5173 && uri.Port != 3000 && uri.Port != 4173)
         return false;
-
+ 
     var host = uri.Host;
-
+ 
     if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || host == "127.0.0.1")
         return true;
-
+ 
     if (!IPAddress.TryParse(host, out var ip) || ip.AddressFamily != AddressFamily.InterNetwork)
         return false;
-
+ 
     var bytes = ip.GetAddressBytes();
-
+ 
     if (bytes[0] == 10)
         return true;
-
+ 
     if (bytes[0] == 192 && bytes[1] == 168)
         return true;
-
+ 
     if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
         return true;
-
+ 
     return false;
 }
-
+ 
 // CORS
 const string CorsPolicyName = "WebRh";
-
+ 
 builder.Services.AddCors(opt =>
 {
     opt.AddPolicy(CorsPolicyName, p =>
@@ -137,30 +138,30 @@ builder.Services.AddCors(opt =>
          .AllowAnyHeader()
          .AllowAnyMethod());
 });
-
+ 
 // JWT Auth
 var jwt = builder.Configuration.GetSection("Jwt");
-
+ 
 var key = jwt["Key"] ?? throw new InvalidOperationException(
     "Falta Jwt:Key. Configúralo con User Secrets (DEV) o variables de entorno (PROD).");
-
+ 
 var issuer = jwt["Issuer"] ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
 var audience = jwt["Audience"] ?? throw new InvalidOperationException("Falta Jwt:Audience.");
-
+ 
 if (key.Length < 32)
 {
     throw new InvalidOperationException("Jwt:Key debe tener al menos 32 caracteres.");
 }
-
+ 
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key));
-
+ 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(opt =>
     {
         opt.RequireHttpsMetadata = false;
         opt.SaveToken = true;
-
+ 
         opt.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
@@ -173,20 +174,32 @@ builder.Services
             ClockSkew = TimeSpan.Zero
         };
     });
-
+ 
 builder.Services.AddAuthorization();
-
+ 
+// Rate limiting (login antifuerza-bruta)
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddFixedWindowLimiter("login", opt =>
+    {
+        opt.PermitLimit = 5;
+        opt.Window = TimeSpan.FromMinutes(1);
+        opt.QueueLimit = 0;
+    });
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+});
+ 
 // Infra para auditoría
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<AuditSaveChangesInterceptor>();
-
+ 
 // Services base de app
 builder.Services.AddScoped<AuditLogger>();
 builder.Services.AddScoped<TokenService>();
-
+ 
 builder.Services.AddScoped<IIncidenciaAuthorizationService, IncidenciaAuthorizationService>();
 builder.Services.AddScoped<IEmpleadoAccessScopeService, EmpleadoAccessScopeService>();
-
+ 
 // Reportes corporativos
 builder.Services.AddScoped<IIncidenciasReportService, IncidenciasReportService>();
 builder.Services.AddScoped<IEmpleadosReportService, EmpleadosReportService>();
@@ -197,16 +210,16 @@ builder.Services.AddScoped<IPuestosReportService, PuestosReportService>();
 builder.Services.AddScoped<ISucursalesReportService, SucursalesReportService>();
 builder.Services.AddScoped<ICumpleaniosReportService, CumpleaniosReportService>();
 builder.Services.AddScoped<IVacacionesReportService, VacacionesReportService>();
-
+ 
 // Empleados / expediente / importación
 builder.Services.AddScoped<IEmpleadoDocumentoStorageService, EmpleadoDocumentoStorageService>();
 builder.Services.AddScoped<IEmpleadoNumberService, EmpleadoNumberService>();
 builder.Services.AddScoped<IEmpleadoImportService, EmpleadoImportService>();
 builder.Services.AddScoped<IEmpleadoMovimientoLaboralService, EmpleadoMovimientoLaboralService>();
-
+ 
 // Reclutamiento
 builder.Services.AddScoped<IReclutamientoReporteService, ReclutamientoReporteService>();
-
+ 
 // Módulo Vacaciones / Kárdex
 builder.Services.AddScoped<IVacacionesService, VacacionesService>();
 builder.Services.AddScoped<IVacacionesDashboardService, VacacionesDashboardService>();
@@ -214,43 +227,43 @@ builder.Services.AddScoped<IVacacionesSolicitudesService, VacacionesSolicitudesS
 builder.Services.AddScoped<IVacacionesSolicitudesNotificationService, VacacionesSolicitudesNotificationService>();
 builder.Services.AddScoped<IAprobacionesNotificationService, AprobacionesNotificationService>();
 builder.Services.AddScoped<IVacacionesLegacyImportService, VacacionesLegacyImportService>();
-
+ 
 // Módulo Cumpleaños
 builder.Services.AddScoped<ICumpleaniosService, CumpleaniosService>();
 builder.Services.AddScoped<ICumpleaniosNotificationService, CumpleaniosNotificationService>();
-
+ 
 // Correo Microsoft 365 / Graph
 builder.Services.Configure<MicrosoftGraphMailOptions>(
     builder.Configuration.GetSection(MicrosoftGraphMailOptions.SectionName));
-
+ 
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<IEmailService, MicrosoftGraphEmailService>();
 builder.Services.AddScoped<INotificationOutboxService, NotificationOutboxService>();
-
+ 
 // Notificaciones de expediente
 builder.Services.Configure<NotificationsOptions>(
     builder.Configuration.GetSection(NotificationsOptions.SectionName));
-
+ 
 builder.Services.AddScoped<IExpedienteNotificationService, ExpedienteNotificationService>();
 builder.Services.AddHostedService<ExpedienteNotificationHostedService>();
 builder.Services.AddHostedService<AprobacionesNotificationHostedService>();
 builder.Services.AddHostedService<NotificationOutboxHostedService>();
-
+ 
 // DbContext PostgreSQL + interceptor de auditoría
 builder.Services.AddDbContext<RhDbContext>((sp, opt) =>
 {
     opt.UseNpgsql(builder.Configuration.GetConnectionString("RhDb"));
     opt.AddInterceptors(sp.GetRequiredService<AuditSaveChangesInterceptor>());
 });
-
+ 
 var app = builder.Build();
-
+ 
 var swaggerEnabled =
     app.Configuration.GetValue<bool?>("Swagger:Enabled") ?? app.Environment.IsDevelopment();
-
+ 
 var useHttpsRedirection =
     app.Configuration.GetValue<bool>("Security:UseHttpsRedirection", false);
-
+ 
 // Redirect raíz según Swagger esté activo o no
 app.MapGet("/", () =>
 {
@@ -258,7 +271,7 @@ app.MapGet("/", () =>
     {
         return Results.Redirect("/swagger");
     }
-
+ 
     return Results.Ok(new
     {
         status = "ok",
@@ -266,42 +279,43 @@ app.MapGet("/", () =>
         environment = app.Environment.EnvironmentName
     });
 });
-
+ 
 // Swagger controlado por configuración
 if (swaggerEnabled)
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
-
+ 
 // HTTPS redirection controlado por configuración
 if (useHttpsRedirection)
 {
     app.UseHttpsRedirection();
 }
-
+ 
 app.UseStaticFiles();
-
+ 
 app.UseCors(CorsPolicyName);
-
+ 
 app.UseAuthentication();
 app.UseMiddleware<ForcePasswordChangeMiddleware>();
+app.UseRateLimiter();
 app.UseAuthorization();
-
+ 
 app.MapControllers();
-
+ 
 // Migraciones + seed + cleanup antes de arrancar
 using (var scope = app.Services.CreateScope())
 {
     var logger = scope.ServiceProvider
         .GetRequiredService<ILoggerFactory>()
         .CreateLogger("Startup");
-
+ 
     var db = scope.ServiceProvider.GetRequiredService<RhDbContext>();
-
+ 
     var applyMigrationsOnStartup =
         app.Configuration.GetValue<bool>("Database:ApplyMigrationsOnStartup", true);
-
+ 
     if (applyMigrationsOnStartup)
     {
         logger.LogInformation("Aplicando migraciones pendientes de EF Core...");
@@ -312,31 +326,32 @@ using (var scope = app.Services.CreateScope())
     {
         logger.LogInformation("Migraciones EF Core omitidas al iniciar. Database:ApplyMigrationsOnStartup=false.");
     }
-
+ 
     logger.LogInformation("Ejecutando seeding inicial...");
     await DbSeeder.SeedAsync(db);
     logger.LogInformation("Seeding completado.");
-
+ 
     var tokens = scope.ServiceProvider.GetRequiredService<TokenService>();
     var deleted = await tokens.CleanupExpiredTokensAsync();
-
+ 
     logger.LogInformation("Refresh tokens expirados eliminados: {DeletedCount}", deleted);
     Console.WriteLine($"[Auth] Refresh tokens expirados eliminados: {deleted}");
 }
-
+ 
 var exitAfterStartupMaintenance =
     app.Configuration.GetValue<bool>("Database:ExitAfterStartupMaintenance", false);
-
+ 
 if (exitAfterStartupMaintenance)
 {
     var logger = app.Services
         .GetRequiredService<ILoggerFactory>()
         .CreateLogger("Startup");
-
+ 
     logger.LogInformation(
         "Mantenimiento de arranque completado. Database:ExitAfterStartupMaintenance=true. La aplicación finalizará sin iniciar servidor HTTP.");
-
+ 
     return;
 }
-
+ 
 app.Run();
+ 
