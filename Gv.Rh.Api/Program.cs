@@ -177,6 +177,10 @@ builder.Services
  
 builder.Services.AddAuthorization();
  
+// Manejador global de excepciones (evita repetir try/catch en cada controller)
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
+ 
 // Rate limiting (login antifuerza-bruta)
 builder.Services.AddRateLimiter(options =>
 {
@@ -292,6 +296,10 @@ if (useHttpsRedirection)
 {
     app.UseHttpsRedirection();
 }
+ 
+// Manejador global de excepciones: debe ir primero en el pipeline
+// para envolver cualquier excepcion que ocurra mas adelante.
+app.UseExceptionHandler();
  
 app.UseStaticFiles();
  

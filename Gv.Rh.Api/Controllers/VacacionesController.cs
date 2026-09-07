@@ -28,6 +28,11 @@ public class VacacionesController : ControllerBase
             _empleadoAccessScopeService = empleadoAccessScopeService;
 }
 
+    // Nota: las excepciones ya no se atrapan aqui. El GlobalExceptionHandler
+    // (Gv.Rh.Api/Middlewares/GlobalExceptionHandler.cs) las traduce a la
+    // respuesta HTTP correcta (KeyNotFoundException -> 404, InvalidOperationException
+    // -> 400, cualquier otra -> 500), evitando repetir el mismo try/catch en cada accion.
+
     [HttpGet("Vacaciones/empleado/{empleadoId:int}/resumen")]
     public async Task<IActionResult> GetResumenEmpleado(
         int empleadoId,
@@ -37,14 +42,7 @@ public class VacacionesController : ControllerBase
         if (accessDenied is not null)
             return accessDenied;
 
-        try
-        {
-            return Ok(await _vacacionesService.GetResumenAsync(empleadoId, cancellationToken));
-        }
-        catch (Exception ex)
-        {
-            return ToActionResult(ex);
-        }
+        return Ok(await _vacacionesService.GetResumenAsync(empleadoId, cancellationToken));
     }
 
     [HttpGet("Vacaciones/empleado/{empleadoId:int}/periodos")]
@@ -56,14 +54,7 @@ public class VacacionesController : ControllerBase
         if (accessDenied is not null)
             return accessDenied;
 
-        try
-        {
-            return Ok(await _vacacionesService.GetPeriodosAsync(empleadoId, cancellationToken));
-        }
-        catch (Exception ex)
-        {
-            return ToActionResult(ex);
-        }
+        return Ok(await _vacacionesService.GetPeriodosAsync(empleadoId, cancellationToken));
     }
 
     [HttpGet("Vacaciones/empleado/{empleadoId:int}/kardex")]
@@ -75,14 +66,7 @@ public class VacacionesController : ControllerBase
         if (accessDenied is not null)
             return accessDenied;
 
-        try
-        {
-            return Ok(await _vacacionesService.GetKardexAsync(empleadoId, cancellationToken));
-        }
-        catch (Exception ex)
-        {
-            return ToActionResult(ex);
-        }
+        return Ok(await _vacacionesService.GetKardexAsync(empleadoId, cancellationToken));
     }
 
     [HttpGet("me/vacaciones/resumen")]
@@ -92,14 +76,7 @@ public class VacacionesController : ControllerBase
         if (!empleadoId.HasValue)
             return Forbid();
 
-        try
-        {
-            return Ok(await _vacacionesService.GetResumenAsync(empleadoId.Value, cancellationToken));
-        }
-        catch (Exception ex)
-        {
-            return ToActionResult(ex);
-        }
+        return Ok(await _vacacionesService.GetResumenAsync(empleadoId.Value, cancellationToken));
     }
 
     [HttpGet("me/vacaciones/periodos")]
@@ -109,14 +86,7 @@ public class VacacionesController : ControllerBase
         if (!empleadoId.HasValue)
             return Forbid();
 
-        try
-        {
-            return Ok(await _vacacionesService.GetPeriodosAsync(empleadoId.Value, cancellationToken));
-        }
-        catch (Exception ex)
-        {
-            return ToActionResult(ex);
-        }
+        return Ok(await _vacacionesService.GetPeriodosAsync(empleadoId.Value, cancellationToken));
     }
 
     [HttpGet("me/vacaciones/kardex")]
@@ -126,14 +96,7 @@ public class VacacionesController : ControllerBase
         if (!empleadoId.HasValue)
             return Forbid();
 
-        try
-        {
-            return Ok(await _vacacionesService.GetKardexAsync(empleadoId.Value, cancellationToken));
-        }
-        catch (Exception ex)
-        {
-            return ToActionResult(ex);
-        }
+        return Ok(await _vacacionesService.GetKardexAsync(empleadoId.Value, cancellationToken));
     }
 
     [Authorize(Roles = "ADMIN,RRHH")]
@@ -143,20 +106,13 @@ public class VacacionesController : ControllerBase
         [FromBody] VacacionGenerarPeriodoRequestDto request,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            var result = await _vacacionesService.GenerarPeriodoAsync(
-                empleadoId,
-                request,
-                TryGetCurrentUserId(),
-                cancellationToken);
+        var result = await _vacacionesService.GenerarPeriodoAsync(
+            empleadoId,
+            request,
+            TryGetCurrentUserId(),
+            cancellationToken);
 
-            return Ok(result);
-        }
-        catch (Exception ex)
-        {
-            return ToActionResult(ex);
-        }
+        return Ok(result);
     }
 
     [Authorize(Roles = "ADMIN,RRHH")]
@@ -166,20 +122,13 @@ public class VacacionesController : ControllerBase
         [FromBody] VacacionRegistrarDisfruteRequestDto request,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            var result = await _vacacionesService.RegistrarDisfruteAsync(
-                empleadoId,
-                request,
-                TryGetCurrentUserId(),
-                cancellationToken);
+        var result = await _vacacionesService.RegistrarDisfruteAsync(
+            empleadoId,
+            request,
+            TryGetCurrentUserId(),
+            cancellationToken);
 
-            return Ok(result);
-        }
-        catch (Exception ex)
-        {
-            return ToActionResult(ex);
-        }
+        return Ok(result);
     }
 
     [Authorize(Roles = "ADMIN,RRHH")]
@@ -189,20 +138,13 @@ public class VacacionesController : ControllerBase
         [FromBody] VacacionAjusteRequestDto request,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            var result = await _vacacionesService.RegistrarAjusteAsync(
-                empleadoId,
-                request,
-                TryGetCurrentUserId(),
-                cancellationToken);
+        var result = await _vacacionesService.RegistrarAjusteAsync(
+            empleadoId,
+            request,
+            TryGetCurrentUserId(),
+            cancellationToken);
 
-            return Ok(result);
-        }
-        catch (Exception ex)
-        {
-            return ToActionResult(ex);
-        }
+        return Ok(result);
     }
 
     private async Task<IActionResult?> EnsureCanAccessEmpleadoAsync(
@@ -321,17 +263,5 @@ public class VacacionesController : ControllerBase
         return !string.IsNullOrWhiteSpace(normalized) && normalized.Contains('@')
             ? normalized
             : null;
-    }
-
-    private ActionResult ToActionResult(Exception ex)
-    {
-        return ex switch
-        {
-            KeyNotFoundException => NotFound(new { message = ex.Message }),
-            InvalidOperationException => BadRequest(new { message = ex.Message }),
-            _ => Problem(
-                title: "No fue posible procesar la operación de vacaciones.",
-                detail: ex.Message)
-        };
     }
 }
